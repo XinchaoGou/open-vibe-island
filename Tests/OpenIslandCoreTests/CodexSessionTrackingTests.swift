@@ -791,6 +791,10 @@ struct CodexSessionTrackingTests {
                     "content": [
                         [
                             "type": "input_text",
+                            "text": "<recommended_plugins>\n- GitHub (github@openai-curated-remote)\n- Figma (figma@openai-curated-remote)\n</recommended_plugins>",
+                        ],
+                        [
+                            "type": "input_text",
                             "text": "# AGENTS.md instructions for /tmp/repo\n\n<INSTRUCTIONS>\nRepository guide\n</INSTRUCTIONS>",
                         ],
                         [

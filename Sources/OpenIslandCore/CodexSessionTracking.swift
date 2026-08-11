@@ -1494,6 +1494,7 @@ public enum CodexRolloutReducer {
 
     private static func isInjectedPromptBlock(_ text: String) -> Bool {
         text.hasPrefix("# AGENTS.md instructions for ")
+            || text.hasPrefix("<recommended_plugins>")
             || text.hasPrefix("<environment_context>")
             || text.hasPrefix("<permissions instructions>")
             || text.hasPrefix("<collaboration_mode>")
