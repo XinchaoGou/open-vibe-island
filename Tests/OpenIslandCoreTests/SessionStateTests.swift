@@ -50,6 +50,39 @@ struct SessionStateTests {
     }
 
     @Test
+    func remoteCodexThreadSnapshotCarriesHostIntoJumpTarget() {
+        var session = AgentSession(
+            id: "remote-thread",
+            title: "Remote task",
+            tool: .codex,
+            phase: .running,
+            summary: "Working",
+            updatedAt: .now
+        )
+        session.isCodexAppSession = true
+
+        let thread = CodexThread(
+            id: "remote-thread",
+            cwd: "/home/developer/project",
+            name: "Remote task",
+            preview: "Do the remote work",
+            modelProvider: "openai",
+            createdAt: 900,
+            updatedAt: 1_000,
+            ephemeral: false,
+            path: "/home/developer/.codex/rollout.jsonl",
+            status: CodexThreadStatus(type: .active, activeFlags: nil),
+            source: .vscode,
+            turns: []
+        )
+
+        var state = SessionState(sessions: [session])
+        _ = state.reconcileCodexAppThreadSnapshot([thread], remoteHost: "station")
+
+        #expect(state.session(id: "remote-thread")?.jumpTarget?.codexRemoteHost == "station")
+    }
+
+    @Test
     func codexThreadSnapshotAppliesOfficialNameAndRemovesInternalRows() {
         let updatedAt = Date(timeIntervalSince1970: 1_000)
         var userSession = AgentSession(
@@ -1457,17 +1490,19 @@ struct SessionStateTests {
     }
 
     @Test
-    func jumpTargetRoundTripsWarpPaneUUIDThroughCodable() throws {
+    func jumpTargetRoundTripsResolvedFieldsThroughCodable() throws {
         let target = JumpTarget(
             terminalApp: "Warp",
             workspaceName: "demo",
             paneTitle: "Claude demo",
             workingDirectory: "/tmp/demo",
-            warpPaneUUID: "D1A5DF3027E44FC080FE2656FAF2BA2E"
+            warpPaneUUID: "D1A5DF3027E44FC080FE2656FAF2BA2E",
+            codexRemoteHost: "station"
         )
         let data = try JSONEncoder().encode(target)
         let decoded = try JSONDecoder().decode(JumpTarget.self, from: data)
         #expect(decoded.warpPaneUUID == "D1A5DF3027E44FC080FE2656FAF2BA2E")
+        #expect(decoded.codexRemoteHost == "station")
 
         // And: legacy JSON without the field decodes to nil
         let legacyJSON = """
@@ -1475,6 +1510,7 @@ struct SessionStateTests {
         """.data(using: .utf8)!
         let legacy = try JSONDecoder().decode(JumpTarget.self, from: legacyJSON)
         #expect(legacy.warpPaneUUID == nil)
+        #expect(legacy.codexRemoteHost == nil)
     }
 
     @Test

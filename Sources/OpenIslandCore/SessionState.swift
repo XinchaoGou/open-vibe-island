@@ -483,6 +483,7 @@ public struct SessionState: Equatable, Sendable {
             jumpTarget.paneTitle = session.title
             jumpTarget.workingDirectory = thread.cwd
             jumpTarget.codexThreadID = thread.id
+            jumpTarget.codexRemoteHost = remoteHost
             session.jumpTarget = jumpTarget
 
             var metadata = session.codexMetadata ?? CodexSessionMetadata()

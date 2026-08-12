@@ -438,7 +438,8 @@ final class CodexAppServerCoordinator {
                     workspaceName: workspaceName,
                     paneTitle: title,
                     workingDirectory: thread.cwd,
-                    codexThreadID: thread.id
+                    codexThreadID: thread.id,
+                    codexRemoteHost: remoteHost
                 ),
                 codexMetadata: CodexSessionMetadata(
                     transcriptPath: thread.path,

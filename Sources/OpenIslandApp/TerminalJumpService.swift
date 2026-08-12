@@ -334,6 +334,14 @@ struct TerminalJumpService {
         if let descriptor {
             switch resolvedBundleIdentifier ?? descriptor.bundleIdentifier {
             case "com.openai.codex":
+                if let remoteHost = target.codexRemoteHost,
+                   !remoteHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    try openAction(["-b", "com.openai.codex"])
+                    if try jumpToCodexRemoteConversation(target) {
+                        return "Focused the Codex.app SSH conversation."
+                    }
+                    return "Activated Codex.app. The SSH conversation could not be selected."
+                }
                 // If we have a thread ID, use the codex:// URL scheme to
                 // open the specific conversation directly.  Otherwise just
                 // activate the app.
@@ -419,6 +427,32 @@ struct TerminalJumpService {
         }
 
         throw TerminalJumpError.unsupportedTerminal(target.terminalApp)
+    }
+
+    private func jumpToCodexRemoteConversation(_ target: JumpTarget) throws -> Bool {
+        let title = target.paneTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return false }
+
+        let script = """
+        tell application id "com.openai.codex" to activate
+        delay 0.15
+        tell application "System Events"
+            set codexProcesses to every application process whose bundle identifier is "com.openai.codex"
+            if (count of codexProcesses) is 0 then return ""
+            tell item 1 of codexProcesses
+                set frontmost to true
+                -- Cmd+K opens Codex's built-in chat and command search.
+                keystroke "k" using command down
+                delay 0.2
+                keystroke "\(escapeAppleScript(title))"
+                delay 0.8
+                key code 36
+            end tell
+        end tell
+        return "matched"
+        """
+
+        return try runAppleScript(script) == "matched"
     }
 
     private func jumpToITermSession(_ target: JumpTarget) throws -> Bool {

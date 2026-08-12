@@ -12,6 +12,10 @@ final class TerminalJumpServiceTests: XCTestCase {
         var values: [(String, [String])] = []
     }
 
+    private final class AppleScriptsBox: @unchecked Sendable {
+        var values: [String] = []
+    }
+
     func testGhosttyJumpScriptActivatesWindowAndRetriesFocusUntilItSticks() {
         let target = JumpTarget(
             terminalApp: "Ghostty",
@@ -463,6 +467,43 @@ final class TerminalJumpServiceTests: XCTestCase {
 
         XCTAssertEqual(result, "Focused the Codex.app conversation.")
         XCTAssertEqual(openedArguments.values, [["codex://threads/\(threadID)"]])
+    }
+
+    func testCodexAppRemoteJumpUsesChatSearchInsteadOfLocalOnlyDeepLink() throws {
+        let openedArguments = OpenedArgumentsBox()
+        let scripts = AppleScriptsBox()
+        let service = TerminalJumpService(
+            applicationResolver: { bundleIdentifier in
+                bundleIdentifier == "com.openai.codex" ? URL(fileURLWithPath: "/Applications/Codex.app") : nil
+            },
+            appRunningChecker: { bundleIdentifier in
+                bundleIdentifier == "com.openai.codex"
+            },
+            openAction: { arguments in
+                openedArguments.values.append(arguments)
+            },
+            appleScriptRunner: { script in
+                scripts.values.append(script)
+                return "matched"
+            }
+        )
+
+        let result = try service.jump(
+            to: JumpTarget(
+                terminalApp: "Codex.app",
+                workspaceName: "anyverse_agent",
+                paneTitle: "清理 StarVLA runtime 并统一 dry-run HOLD",
+                workingDirectory: "/home/developer/anyverse_agent",
+                codexThreadID: "019ff12f-aa51-7903-acd2-1a3281ad754f",
+                codexRemoteHost: "station"
+            )
+        )
+
+        XCTAssertEqual(result, "Focused the Codex.app SSH conversation.")
+        XCTAssertEqual(openedArguments.values, [["-b", "com.openai.codex"]])
+        XCTAssertEqual(scripts.values.count, 1)
+        XCTAssertTrue(scripts.values[0].contains("Cmd+K"))
+        XCTAssertTrue(scripts.values[0].contains("清理 StarVLA runtime 并统一 dry-run HOLD"))
     }
 
     func testTraeCNJumpFallsBackToWorkspaceViaTraeCLI() throws {
