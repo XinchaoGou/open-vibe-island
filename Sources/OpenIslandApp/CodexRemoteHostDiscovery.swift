@@ -7,6 +7,7 @@ struct CodexRemoteHostDiscovery: Sendable {
     struct Connection: Equatable, Hashable, Sendable {
         let host: String
         let sshOptions: [String]
+        let remoteCommand: String
     }
 
     typealias CommandRunner = @Sendable (_ executablePath: String, _ arguments: [String]) -> String?
@@ -35,27 +36,53 @@ struct CodexRemoteHostDiscovery: Sendable {
         fromProcessList processList: String,
         excludingParentPID: Int32? = nil
     ) -> [Connection] {
+        struct ProcessRecord {
+            let pid: Int32?
+            let parentPID: Int32?
+            let command: String
+            let tokens: [String]
+        }
+        let records = processList.split(whereSeparator: \.isNewline).map { line in
+            let command = String(line)
+            let tokens = shellTokens(in: command)
+            return ProcessRecord(
+                pid: tokens.first.flatMap(Int32.init),
+                parentPID: tokens.dropFirst().first.flatMap(Int32.init),
+                command: command,
+                tokens: tokens
+            )
+        }
+        let recordsByPID = Dictionary(uniqueKeysWithValues: records.compactMap { record in
+            record.pid.map { ($0, record) }
+        })
         var connectionsByHost: [String: Connection] = [:]
 
-        for line in processList.split(whereSeparator: \.isNewline) {
-            let command = String(line)
-            guard command.contains("app-server proxy") else { continue }
-            let tokens = shellTokens(in: command)
+        for record in records {
+            guard record.command.contains("app-server proxy") else { continue }
+            let tokens = record.tokens
             guard let sshIndex = tokens.firstIndex(where: {
                 $0 == "ssh" || $0.hasSuffix("/ssh")
             }) else { continue }
-            if let excludingParentPID,
-               sshIndex >= 2,
-               Int32(tokens[sshIndex - 1]) == excludingParentPID {
+            if record.parentPID == excludingParentPID {
+                continue
+            }
+            if let parentPID = record.parentPID,
+               let parent = recordsByPID[parentPID],
+               !isCodexDesktopProcess(parent.command) {
                 continue
             }
             let sshArguments = Array(tokens.dropFirst(sshIndex + 1))
             guard let target = sshTarget(in: sshArguments) else {
                 continue
             }
+            let remoteArguments = Array(sshArguments.dropFirst(target.index + 1))
+            guard let remoteCommand = sanitizedRemoteCommand(from: remoteArguments) else {
+                continue
+            }
             connectionsByHost[target.host] = Connection(
                 host: target.host,
-                sshOptions: Array(sshArguments[..<target.index])
+                sshOptions: Array(sshArguments[..<target.index]),
+                remoteCommand: remoteCommand
             )
         }
 
@@ -87,6 +114,31 @@ struct CodexRemoteHostDiscovery: Sendable {
             return (argument, index)
         }
         return nil
+    }
+
+    private static func sanitizedRemoteCommand(from arguments: [String]) -> String? {
+        guard !arguments.isEmpty else { return nil }
+        var sanitized = arguments
+        if let payloadIndex = sanitized.indices.last,
+           sanitized[payloadIndex].contains("app-server proxy") {
+            let payload = sanitized[payloadIndex]
+            if payload.trimmingCharacters(in: .whitespaces).hasPrefix("printf "),
+               let separator = payload.firstIndex(of: ";") {
+                sanitized[payloadIndex] = String(payload[payload.index(after: separator)...])
+                    .trimmingCharacters(in: .whitespaces)
+            }
+        }
+        guard sanitized.joined(separator: " ").contains("app-server proxy") else { return nil }
+        return sanitized.map(shellQuote).joined(separator: " ")
+    }
+
+    private static func shellQuote(_ argument: String) -> String {
+        "'" + argument.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private static func isCodexDesktopProcess(_ command: String) -> Bool {
+        command.contains("/ChatGPT.app/Contents/MacOS/ChatGPT")
+            || command.contains("/Codex.app/Contents/MacOS/Codex")
     }
 
     /// A deliberately small POSIX shell tokenizer. It only needs to preserve

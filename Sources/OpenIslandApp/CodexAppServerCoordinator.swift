@@ -43,7 +43,6 @@ final class CodexAppServerCoordinator {
 
     private static let rateLimitsRefreshInterval: TimeInterval = 60
     private static let threadSnapshotInterval: TimeInterval = 10
-    nonisolated static let remoteProxyCommand = #"PATH="${CODEX_INSTALL_DIR:-$HOME/.local/bin}:$PATH"; export PATH; if command -v codex >/dev/null 2>&1; then exec codex app-server proxy; fi; exec "$SHELL" -l -i -c 'exec codex app-server proxy'"#
 
     /// Callback to emit AgentEvents into AppModel.
     @ObservationIgnored
@@ -239,7 +238,7 @@ final class CodexAppServerCoordinator {
             guard let self else { return }
             let remoteClient = CodexAppServerClient(
                 executablePath: "/usr/bin/ssh",
-                arguments: connection.sshOptions + [host, Self.remoteProxyCommand],
+                arguments: connection.sshOptions + [host, connection.remoteCommand],
                 transport: .webSocket
             )
             remoteClient.onNotification = { [weak self] notification in

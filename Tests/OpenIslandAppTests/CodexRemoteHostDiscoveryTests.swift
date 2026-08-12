@@ -14,7 +14,7 @@ struct CodexRemoteHostDiscoveryTests {
         )
         let client = CodexAppServerClient(
             executablePath: "/usr/bin/ssh",
-            arguments: connection.sshOptions + [host, CodexAppServerCoordinator.remoteProxyCommand],
+            arguments: connection.sshOptions + [host, connection.remoteCommand],
             transport: .webSocket
         )
         client.requestTimeoutSeconds = 5
@@ -32,11 +32,9 @@ struct CodexRemoteHostDiscoveryTests {
         44527 1491 /Applications/ChatGPT.app/Contents/Resources/codex app-server --listen stdio://
         """#
 
-        #expect(CodexRemoteHostDiscovery.hosts(fromProcessList: processList) == ["station"])
-        #expect(
-            CodexRemoteHostDiscovery.connections(fromProcessList: processList).first?.sshOptions
-                == ["-T", "-v", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15"]
-        )
+        let connection = CodexRemoteHostDiscovery.connections(fromProcessList: processList).first
+        #expect(connection?.host == "station")
+        #expect(connection?.sshOptions == ["-T", "-v", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15"])
     }
 
     @Test
@@ -47,16 +45,21 @@ struct CodexRemoteHostDiscoveryTests {
         102 50 /usr/bin/ssh -T -o BatchMode=yes station sh -c 'exec codex app-server proxy'
         """#
 
-        #expect(CodexRemoteHostDiscovery.hosts(fromProcessList: processList) == ["station"])
+        let connection = CodexRemoteHostDiscovery.connections(fromProcessList: processList).first
+        #expect(connection?.host == "station")
     }
 
     @Test
     func discoversHostInCodexDesktopNestedBootstrapCommand() {
         let processList = #"""
-        45172 656 /usr/bin/ssh -T -v -o BatchMode=yes -o ServerAliveInterval=15 station sh -c 'if [ -z "$SHELL" ]; then exit 127; fi; CODEX_REMOTE_PAYLOAD="$1"; exec "$SHELL" -l -i -c '\''exec /bin/sh -c "$CODEX_REMOTE_PAYLOAD"'\''' sh 'PATH="$HOME/.local/bin:$PATH"; export PATH; exec codex app-server proxy'
+        45172 656 /usr/bin/ssh -T -v -o BatchMode=yes -o ServerAliveInterval=15 station sh -c 'CODEX_REMOTE_PAYLOAD="$1"; export CODEX_REMOTE_PAYLOAD; exec "$SHELL" -l -i -c '\''CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"; export CODEX_HOME; exec /bin/sh -c "$CODEX_REMOTE_PAYLOAD"'\''' sh 'printf '\''%b'\'' '\''\032\114\046\242\075\215\046\315'\''; PATH="${CODEX_INSTALL_DIR:-$HOME/.local/bin}:$PATH"; export PATH; exec codex app-server proxy'
         """#
 
-        #expect(CodexRemoteHostDiscovery.hosts(fromProcessList: processList) == ["station"])
+        let connection = CodexRemoteHostDiscovery.connections(fromProcessList: processList).first
+        #expect(connection?.host == "station")
+        #expect(connection?.remoteCommand.contains("CODEX_REMOTE_PAYLOAD") == true)
+        #expect(connection?.remoteCommand.contains("CODEX_HOME") == true)
+        #expect(connection?.remoteCommand.contains("printf") == false)
     }
 
     @Test
@@ -70,9 +73,8 @@ struct CodexRemoteHostDiscoveryTests {
             fromProcessList: processList,
             excludingParentPID: 999
         )
-        #expect(connections == [
-            CodexRemoteHostDiscovery.Connection(host: "station", sshOptions: ["-T"]),
-        ])
+        #expect(connections.map(\.host) == ["station"])
+        #expect(connections.first?.sshOptions == ["-T"])
     }
 
     @Test
@@ -82,5 +84,15 @@ struct CodexRemoteHostDiscoveryTests {
 
         #expect(presence.hostsToDisconnect(currentHosts: current, discoveredHosts: []).isEmpty)
         #expect(presence.hostsToDisconnect(currentHosts: current, discoveredHosts: []) == ["station"])
+    }
+
+    @Test
+    func ignoresProxyNotOwnedByCodexDesktop() {
+        let processList = #"""
+        50 1 /Applications/Other.app/Contents/MacOS/Other
+        101 50 /usr/bin/ssh -T station sh -c 'exec codex app-server proxy'
+        """#
+
+        #expect(CodexRemoteHostDiscovery.connections(fromProcessList: processList).isEmpty)
     }
 }
