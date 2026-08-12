@@ -4,6 +4,11 @@ import Foundation
 /// proxies. The process is the local, read-only source of truth for which
 /// remote environments are connected right now.
 struct CodexRemoteHostDiscovery: Sendable {
+    struct Connection: Equatable, Hashable, Sendable {
+        let host: String
+        let sshOptions: [String]
+    }
+
     typealias CommandRunner = @Sendable (_ executablePath: String, _ arguments: [String]) -> String?
 
     private let commandRunner: CommandRunner
@@ -12,15 +17,25 @@ struct CodexRemoteHostDiscovery: Sendable {
         self.commandRunner = commandRunner
     }
 
-    func discover() -> [String] {
-        guard let output = commandRunner("/bin/ps", ["-Ao", "pid=,command="]) else {
-            return []
+    func discover() -> [Connection]? {
+        guard let output = commandRunner("/bin/ps", ["-Ao", "pid=,ppid=,command="]) else {
+            return nil
         }
-        return Self.hosts(fromProcessList: output)
+        return Self.connections(
+            fromProcessList: output,
+            excludingParentPID: ProcessInfo.processInfo.processIdentifier
+        )
     }
 
     static func hosts(fromProcessList processList: String) -> [String] {
-        var hosts: Set<String> = []
+        connections(fromProcessList: processList).map(\.host)
+    }
+
+    static func connections(
+        fromProcessList processList: String,
+        excludingParentPID: Int32? = nil
+    ) -> [Connection] {
+        var connectionsByHost: [String: Connection] = [:]
 
         for line in processList.split(whereSeparator: \.isNewline) {
             let command = String(line)
@@ -29,13 +44,22 @@ struct CodexRemoteHostDiscovery: Sendable {
             guard let sshIndex = tokens.firstIndex(where: {
                 $0 == "ssh" || $0.hasSuffix("/ssh")
             }) else { continue }
-            guard let host = sshHost(in: Array(tokens.dropFirst(sshIndex + 1))) else {
+            if let excludingParentPID,
+               sshIndex >= 2,
+               Int32(tokens[sshIndex - 1]) == excludingParentPID {
                 continue
             }
-            hosts.insert(host)
+            let sshArguments = Array(tokens.dropFirst(sshIndex + 1))
+            guard let target = sshTarget(in: sshArguments) else {
+                continue
+            }
+            connectionsByHost[target.host] = Connection(
+                host: target.host,
+                sshOptions: Array(sshArguments[..<target.index])
+            )
         }
 
-        return hosts.sorted()
+        return connectionsByHost.values.sorted { $0.host < $1.host }
     }
 
     private static let optionsWithValue: Set<String> = [
@@ -44,12 +68,13 @@ struct CodexRemoteHostDiscovery: Sendable {
         "-W", "-w",
     ]
 
-    private static func sshHost(in arguments: [String]) -> String? {
+    private static func sshTarget(in arguments: [String]) -> (host: String, index: Int)? {
         var index = 0
         while index < arguments.count {
             let argument = arguments[index]
             if argument == "--" {
-                return arguments.indices.contains(index + 1) ? arguments[index + 1] : nil
+                guard arguments.indices.contains(index + 1) else { return nil }
+                return (arguments[index + 1], index + 1)
             }
             if argument.hasPrefix("-") {
                 if optionsWithValue.contains(argument) {
@@ -59,7 +84,7 @@ struct CodexRemoteHostDiscovery: Sendable {
                 }
                 continue
             }
-            return argument
+            return (argument, index)
         }
         return nil
     }
@@ -128,5 +153,36 @@ struct CodexRemoteHostDiscovery: Sendable {
         } catch {
             return nil
         }
+    }
+}
+
+/// Debounces transient `ps` gaps so a single missed sample does not remove
+/// every task for an otherwise connected SSH environment.
+struct CodexRemoteHostPresence {
+    private(set) var missCounts: [String: Int] = [:]
+
+    mutating func hostsToDisconnect(
+        currentHosts: Set<String>,
+        discoveredHosts: Set<String>,
+        requiredMisses: Int = 2
+    ) -> Set<String> {
+        for host in discoveredHosts {
+            missCounts[host] = nil
+        }
+
+        var disconnected: Set<String> = []
+        for host in currentHosts where !discoveredHosts.contains(host) {
+            let misses = (missCounts[host] ?? 0) + 1
+            missCounts[host] = misses
+            if misses >= requiredMisses {
+                disconnected.insert(host)
+                missCounts[host] = nil
+            }
+        }
+        return disconnected
+    }
+
+    mutating func reset() {
+        missCounts.removeAll()
     }
 }

@@ -24,6 +24,12 @@ final class CodexAppServerCoordinator {
     private var remoteConnectTasks: [String: Task<Void, Never>] = [:]
 
     @ObservationIgnored
+    private var remoteConnections: [String: CodexRemoteHostDiscovery.Connection] = [:]
+
+    @ObservationIgnored
+    private var remoteHostPresence = CodexRemoteHostPresence()
+
+    @ObservationIgnored
     private let remoteHostDiscovery = CodexRemoteHostDiscovery()
 
     @ObservationIgnored
@@ -37,6 +43,7 @@ final class CodexAppServerCoordinator {
 
     private static let rateLimitsRefreshInterval: TimeInterval = 60
     private static let threadSnapshotInterval: TimeInterval = 10
+    nonisolated static let remoteProxyCommand = #"PATH="${CODEX_INSTALL_DIR:-$HOME/.local/bin}:$PATH"; export PATH; if command -v codex >/dev/null 2>&1; then exec codex app-server proxy; fi; exec "$SHELL" -l -i -c 'exec codex app-server proxy'"#
 
     /// Callback to emit AgentEvents into AppModel.
     @ObservationIgnored
@@ -122,6 +129,8 @@ final class CodexAppServerCoordinator {
         remoteConnectTasks.removeAll()
         for client in remoteClients.values { client.stop() }
         remoteClients.removeAll()
+        remoteConnections.removeAll()
+        remoteHostPresence.reset()
         isConnected = false
         lastRateLimitsRefreshAt = .distantPast
         lastThreadSnapshotAt = .distantPast
@@ -135,8 +144,8 @@ final class CodexAppServerCoordinator {
             lastRemoteHostDiscoveryAt = now
             let discovery = remoteHostDiscovery
             Task.detached(priority: .utility) { [weak self] in
-                let hosts = discovery.discover()
-                await self?.synchronizeRemoteHosts(hosts)
+                guard let connections = discovery.discover() else { return }
+                await self?.synchronizeRemoteHosts(connections)
             }
         }
 
@@ -189,28 +198,48 @@ final class CodexAppServerCoordinator {
         }
     }
 
-    private func synchronizeRemoteHosts(_ hosts: [String]) {
-        let discoveredHosts = Set(hosts)
+    private func synchronizeRemoteHosts(_ connections: [CodexRemoteHostDiscovery.Connection]) {
+        let discoveredByHost = Dictionary(uniqueKeysWithValues: connections.map { ($0.host, $0) })
+        let discoveredHosts = Set(discoveredByHost.keys)
 
-        for host in Array(remoteClients.keys) where !discoveredHosts.contains(host) {
+        for (host, client) in Array(remoteClients) where !client.isRunning {
+            remoteClients[host] = nil
+            client.stop()
+        }
+
+        for (host, connection) in discoveredByHost
+        where remoteConnections[host] != nil && remoteConnections[host] != connection {
             remoteClients.removeValue(forKey: host)?.stop()
+            remoteConnectTasks.removeValue(forKey: host)?.cancel()
+            remoteConnections[host] = nil
+        }
+
+        let trackedHosts = Set(remoteConnections.keys)
+        let disconnectedHosts = remoteHostPresence.hostsToDisconnect(
+            currentHosts: trackedHosts,
+            discoveredHosts: discoveredHosts
+        )
+        for host in disconnectedHosts {
+            remoteClients.removeValue(forKey: host)?.stop()
+            remoteConnectTasks.removeValue(forKey: host)?.cancel()
+            remoteConnections[host] = nil
             onThreadSnapshot?([], host)
         }
-        for host in Array(remoteConnectTasks.keys) where !discoveredHosts.contains(host) {
-            remoteConnectTasks.removeValue(forKey: host)?.cancel()
-        }
-        for host in discoveredHosts where remoteClients[host] == nil && remoteConnectTasks[host] == nil {
-            connectRemoteHost(host)
+
+        for connection in connections
+        where remoteClients[connection.host] == nil && remoteConnectTasks[connection.host] == nil {
+            remoteConnections[connection.host] = connection
+            connectRemoteHost(connection)
         }
     }
 
-    private func connectRemoteHost(_ host: String) {
+    private func connectRemoteHost(_ connection: CodexRemoteHostDiscovery.Connection) {
+        let host = connection.host
         let task = Task { [weak self] in
             guard let self else { return }
-            let remoteCommand = #"exec "$SHELL" -l -i -c 'exec codex app-server proxy'"#
             let remoteClient = CodexAppServerClient(
                 executablePath: "/usr/bin/ssh",
-                arguments: ["-T", host, remoteCommand],
+                arguments: connection.sshOptions + [host, Self.remoteProxyCommand],
                 transport: .webSocket
             )
             remoteClient.onNotification = { [weak self] notification in

@@ -70,7 +70,7 @@ Each event carries a stable session identifier, agent type, timestamps, and enou
 
 ## State Management
 
-- `SessionState.apply(_:)` is the single source of truth for session mutations (pure reducer)
+- `SessionState.apply(_:)` is the source of truth for event-driven session mutations (pure reducer); authoritative Codex task-list snapshots use the scoped `reconcileCodexAppThreadSnapshot` path
 - `AppModel` owns all live state and bridge lifecycle
 - All models are `Sendable` and `Codable`
 
