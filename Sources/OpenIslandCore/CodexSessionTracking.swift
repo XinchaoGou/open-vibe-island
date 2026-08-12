@@ -154,7 +154,15 @@ public extension CodexTrackedSessionRecord {
     }
 
     var shouldRestoreToLiveState: Bool {
-        origin != .demo && !LegacyMockSessionIDs.all.contains(sessionID)
+        guard origin != .demo, !LegacyMockSessionIDs.all.contains(sessionID) else {
+            return false
+        }
+        guard let transcriptPath = codexMetadata?.transcriptPath else {
+            return true
+        }
+        return !CodexRolloutDiscovery.isSubagentRollout(
+            at: URL(fileURLWithPath: transcriptPath)
+        )
     }
 }
 
@@ -373,6 +381,7 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
         var sessionID: String
         var cwd: String
         var timestamp: Date?
+        var isSubagent: Bool
 
         var workspaceName: String {
             let workspace = URL(fileURLWithPath: cwd).lastPathComponent
@@ -635,6 +644,7 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
         sessionMeta: SessionMeta?
     ) -> CodexTrackedSessionRecord? {
         guard let sessionMeta else { return nil }
+        guard !sessionMeta.isSubagent else { return nil }
         guard !CodexRolloutReducer.isInternalSessionPrompt(snapshot.initialUserPrompt) else {
             return nil
         }
@@ -683,8 +693,40 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
             cwd: cwd,
             timestamp: codexRolloutParseTimestamp(
                 (payload["timestamp"] as? String) ?? (object["timestamp"] as? String)
-            )
+            ),
+            isSubagent: Self.isSubagentSessionMeta(payload)
         )
+    }
+
+    fileprivate static func isSubagentRollout(at fileURL: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
+            return false
+        }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: streamingChunkSize),
+              !data.isEmpty else {
+            return false
+        }
+
+        for line in String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let object = codexRolloutJSONObject(for: String(line)),
+                  object["type"] as? String == "session_meta" else {
+                continue
+            }
+            let payload = object["payload"] as? [String: Any] ?? [:]
+            return isSubagentSessionMeta(payload)
+        }
+        return false
+    }
+
+    private static func isSubagentSessionMeta(_ payload: [String: Any]) -> Bool {
+        if (payload["thread_source"] as? String)?.lowercased() == "subagent" {
+            return true
+        }
+        if (payload["source"] as? String)?.lowercased() == "subagent" {
+            return true
+        }
+        return (payload["source"] as? [String: Any])?["subagent"] != nil
     }
 
     private func extractCompleteLines(from buffer: inout Data) -> [String] {
