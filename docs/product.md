@@ -49,7 +49,7 @@ CLI coding agents are powerful, but they pull attention away from the editor and
 
 - **Notch overlay** — sits in the notch area on notch Macs, falls back to a compact top-center bar on external displays or non-notch Macs
 - **Settings** — hook install/uninstall, usage dashboard, General, Display, Sound, Shortcuts, Lab, About
-- **Notification mode** — auto-height panel for permission requests and session events
+- **Notification mode** — auto-height panel reserved for completed work and permission requests that remain unresolved long enough to need human attention
 - **Notification sounds** — configurable system sounds with mute toggle
 - **i18n** — English and Simplified Chinese
 - **Session discovery** — auto-discover from local transcripts, persist across launches

@@ -24,8 +24,6 @@ enum IslandSurface: Equatable {
         switch event {
         case let .permissionRequested(payload):
             .sessionList(actionableSessionID: payload.sessionID)
-        case let .questionAsked(payload):
-            .sessionList(actionableSessionID: payload.sessionID)
         case let .sessionCompleted(payload):
             payload.isInterrupt == true ? nil : .sessionList(actionableSessionID: payload.sessionID)
         default:

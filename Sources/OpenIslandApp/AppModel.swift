@@ -521,6 +521,9 @@ final class AppModel {
     @ObservationIgnored
     private let isNotificationSessionAlreadyFrontmost: @Sendable (AgentSession) async -> Bool
 
+    @ObservationIgnored
+    private let approvalNotificationDelay: Duration
+
 
     @ObservationIgnored
     var harnessRuntimeMonitor: HarnessRuntimeMonitor? {
@@ -586,10 +589,12 @@ final class AppModel {
         },
         isNotificationSessionAlreadyFrontmost: @escaping @Sendable (AgentSession) async -> Bool = { session in
             await ForegroundTerminalSessionProbe().matches(session: session)
-        }
+        },
+        approvalNotificationDelay: Duration = .seconds(2)
     ) {
         self.terminalJumpAction = terminalJumpAction
         self.isNotificationSessionAlreadyFrontmost = isNotificationSessionAlreadyFrontmost
+        self.approvalNotificationDelay = approvalNotificationDelay
         UserDefaults.standard.register(defaults: [
             Self.showDockIconDefaultsKey: true,
             Self.hapticFeedbackEnabledDefaultsKey: false,
@@ -1552,10 +1557,16 @@ final class AppModel {
         }
 
         if let surface = IslandSurface.notificationSurface(for: event) {
+            let delay: Duration = if case .permissionRequested = event {
+                approvalNotificationDelay
+            } else {
+                .zero
+            }
             scheduleNotificationSurfacePresentationIfNeeded(
                 surface,
                 wasAlreadyCompleted: wasAlreadyCompleted,
-                ingress: ingress
+                ingress: ingress,
+                delay: delay
             )
         }
     }
@@ -1563,12 +1574,41 @@ final class AppModel {
     private func scheduleNotificationSurfacePresentationIfNeeded(
         _ surface: IslandSurface,
         wasAlreadyCompleted: Bool,
-        ingress: TrackedEventIngress
+        ingress: TrackedEventIngress,
+        delay: Duration
     ) {
         guard !wasAlreadyCompleted,
               notificationSurfaceIsEligibleForPresentation(surface, ingress: ingress),
               let sessionID = surface.sessionID,
               let session = state.session(id: sessionID) else {
+            return
+        }
+
+        if delay > .zero {
+            notificationPresentationTask?.cancel()
+            notificationPresentationTask = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(for: delay)
+                } catch {
+                    return
+                }
+
+                guard let self,
+                      self.notificationSurfaceIsEligibleForPresentation(surface, ingress: ingress) else {
+                    return
+                }
+
+                if self.suppressFrontmostNotifications,
+                   await self.isNotificationSessionAlreadyFrontmost(session) {
+                    return
+                }
+
+                guard !Task.isCancelled,
+                      self.notificationSurfaceIsEligibleForPresentation(surface, ingress: ingress) else {
+                    return
+                }
+                self.presentNotificationSurface(surface)
+            }
             return
         }
 

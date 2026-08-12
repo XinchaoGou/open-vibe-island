@@ -570,7 +570,8 @@ struct AppModelSessionListTests {
         let model = AppModel(
             isNotificationSessionAlreadyFrontmost: { session in
                 session.id == "frontmost-session"
-            }
+            },
+            approvalNotificationDelay: .milliseconds(20)
         )
         model.notchStatus = .closed
         model.notchOpenReason = nil
@@ -619,7 +620,8 @@ struct AppModelSessionListTests {
     func bridgeNotificationStillPresentsWhenSessionIsNotFrontmost() async throws {
         let now = Date(timeIntervalSince1970: 2_000)
         let model = AppModel(
-            isNotificationSessionAlreadyFrontmost: { _ in false }
+            isNotificationSessionAlreadyFrontmost: { _ in false },
+            approvalNotificationDelay: .milliseconds(20)
         )
         model.notchStatus = .closed
         model.notchOpenReason = nil
@@ -665,6 +667,66 @@ struct AppModelSessionListTests {
         #expect(model.notchStatus == .opened)
         #expect(model.notchOpenReason == .notification)
         #expect(model.islandSurface == .sessionList(actionableSessionID: "background-session"))
+    }
+
+    @Test
+    func approvalResolvedAutomaticallyDoesNotInterruptTheUser() async throws {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let model = AppModel(
+            isNotificationSessionAlreadyFrontmost: { _ in false },
+            approvalNotificationDelay: .milliseconds(50)
+        )
+        model.suppressFrontmostNotifications = false
+        model.notchStatus = .closed
+        model.notchOpenReason = nil
+        model.state = SessionState(
+            sessions: [
+                AgentSession(
+                    id: "auto-approved-session",
+                    title: "Codex · open-island",
+                    tool: .codex,
+                    origin: .live,
+                    attachmentState: .attached,
+                    phase: .running,
+                    summary: "Working.",
+                    updatedAt: now
+                ),
+            ]
+        )
+
+        model.applyTrackedEvent(
+            .permissionRequested(
+                PermissionRequested(
+                    sessionID: "auto-approved-session",
+                    request: PermissionRequest(
+                        title: "Run command",
+                        summary: "Codex requested approval.",
+                        affectedPath: "/tmp"
+                    ),
+                    timestamp: now.addingTimeInterval(1)
+                )
+            ),
+            updateLastActionMessage: false,
+            ingress: .bridge
+        )
+
+        #expect(model.notchStatus == .closed)
+
+        model.applyTrackedEvent(
+            .actionableStateResolved(
+                ActionableStateResolved(
+                    sessionID: "auto-approved-session",
+                    summary: "Approved automatically.",
+                    timestamp: now.addingTimeInterval(2)
+                )
+            ),
+            updateLastActionMessage: false,
+            ingress: .bridge
+        )
+
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(model.notchStatus == .closed)
+        #expect(model.notchOpenReason == nil)
     }
 
     @Test
