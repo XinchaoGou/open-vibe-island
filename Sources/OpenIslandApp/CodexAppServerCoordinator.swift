@@ -17,6 +17,11 @@ final class CodexAppServerCoordinator {
     @ObservationIgnored
     private var connectTask: Task<Void, Never>?
 
+    @ObservationIgnored
+    private var lastRateLimitsRefreshAt = Date.distantPast
+
+    private static let rateLimitsRefreshInterval: TimeInterval = 60
+
     /// Callback to emit AgentEvents into AppModel.
     @ObservationIgnored
     var onEvent: ((AgentEvent) -> Void)?
@@ -24,6 +29,10 @@ final class CodexAppServerCoordinator {
     /// Callback to log status messages.
     @ObservationIgnored
     var onStatusMessage: ((String) -> Void)?
+
+    /// Publishes authoritative account usage read directly from Codex.
+    @ObservationIgnored
+    var onUsageSnapshot: ((CodexUsageSnapshot) -> Void)?
 
     /// Returns `true` if a session with the given id is already tracked.
     /// Used to avoid re-emitting `sessionStarted` (which rebuilds the
@@ -72,8 +81,10 @@ final class CodexAppServerCoordinator {
 
                 self.onStatusMessage?("Connected to Codex app-server.")
 
-                // Fetch currently loaded threads and create sessions.
-                await self.syncLoadedThreads()
+                // This app-server process has no loaded-thread state of its
+                // own. Sync recent account threads and live account usage.
+                await self.syncRecentThreads()
+                await self.refreshAccountRateLimits()
             } catch {
                 self.connectTask = nil
                 self.onStatusMessage?("Failed to connect to Codex app-server: \(error.localizedDescription)")
@@ -88,16 +99,31 @@ final class CodexAppServerCoordinator {
         client?.stop()
         client = nil
         isConnected = false
+        lastRateLimitsRefreshAt = .distantPast
+    }
+
+    /// Refresh account usage while connected, throttled for the monitor's
+    /// frequent maintenance cadence.
+    func maintenanceTick(now: Date = .now) {
+        guard isConnected,
+              now.timeIntervalSince(lastRateLimitsRefreshAt) >= Self.rateLimitsRefreshInterval else {
+            return
+        }
+        lastRateLimitsRefreshAt = now
+        Task { [weak self] in
+            await self?.refreshAccountRateLimits()
+        }
     }
 
     // MARK: - Thread sync
 
-    private func syncLoadedThreads() async {
+    private func syncRecentThreads() async {
         guard let client else { return }
         do {
-            let threads = try await client.listLoadedThreads()
+            let threads = try await client.listThreads(limit: 40)
+            let cutoff = Int(Date.now.addingTimeInterval(-86_400).timeIntervalSince1970)
             var created = 0
-            for thread in threads where !thread.ephemeral {
+            for thread in threads where !thread.ephemeral && thread.updatedAt >= cutoff {
                 // Skip threads already tracked — re-emitting sessionStarted
                 // rebuilds the AgentSession and would wipe richer state
                 // already accumulated from hooks or rediscovery.
@@ -106,10 +132,21 @@ final class CodexAppServerCoordinator {
                 created += 1
             }
             if created > 0 {
-                onStatusMessage?("Synced \(created) new Codex thread(s) from app-server.")
+                onStatusMessage?("Synced \(created) recent Codex thread(s) from app-server.")
             }
         } catch {
-            onStatusMessage?("Failed to list loaded Codex threads: \(error.localizedDescription)")
+            onStatusMessage?("Failed to list recent Codex threads: \(error.localizedDescription)")
+        }
+    }
+
+    private func refreshAccountRateLimits() async {
+        guard let client else { return }
+        lastRateLimitsRefreshAt = .now
+        do {
+            let rateLimits = try await client.readAccountRateLimits()
+            onUsageSnapshot?(CodexUsageSnapshot(rateLimits: rateLimits))
+        } catch {
+            onStatusMessage?("Failed to read Codex rate limits: \(error.localizedDescription)")
         }
     }
 
@@ -232,6 +269,11 @@ final class CodexAppServerCoordinator {
                     timestamp: .now
                 )
             ))
+
+        case .accountRateLimitsUpdated:
+            Task { [weak self] in
+                await self?.refreshAccountRateLimits()
+            }
 
         case .unknown:
             break

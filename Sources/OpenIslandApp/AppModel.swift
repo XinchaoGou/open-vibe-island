@@ -674,6 +674,9 @@ final class AppModel {
         codexAppServer.onStatusMessage = { [weak self] message in
             self?.lastActionMessage = message
         }
+        codexAppServer.onUsageSnapshot = { [weak self] snapshot in
+            self?.hooks.codexUsageSnapshot = snapshot
+        }
         codexAppServer.isSessionTracked = { [weak self] id in
             self?.state.session(id: id) != nil
         }
@@ -701,6 +704,7 @@ final class AppModel {
         }
         monitoring.onCodexAppMaintenanceTick = { [weak self] in
             self?.discovery.maintainCodexAppSessionsIfNeeded()
+            self?.codexAppServer.maintenanceTick()
         }
         refreshOverlayDisplayConfiguration()
         hasFinishedInit = true

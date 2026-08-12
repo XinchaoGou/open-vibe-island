@@ -255,10 +255,10 @@ final class HookInstallationCoordinator {
 
     var codexUsageStatusSummary: String {
         if let summary = codexUsageSummaryText {
-            return "Reading the latest local rollout token_count snapshots · \(summary)"
+            return "Reading Codex account rate limits · \(summary)"
         }
 
-        return "Passively reading ~/.codex/sessions/**/rollout-*.jsonl and extracting token_count.rate_limits."
+        return "Waiting for Codex account rate limits; local rollout data is used as a fallback."
     }
 
     var codexUsageSummaryText: String? {
@@ -779,7 +779,12 @@ final class HookInstallationCoordinator {
                 let snapshot = try await Task.detached(priority: .utility) {
                     try CodexUsageLoader.load()
                 }.value
-                self.codexUsageSnapshot = snapshot
+                // A live app-server snapshot is authoritative. Keep rollout
+                // parsing as a startup/offline fallback without allowing its
+                // older token_count event to overwrite current account data.
+                if self.codexUsageSnapshot?.sourceFilePath != CodexUsageSnapshot.appServerSourcePath {
+                    self.codexUsageSnapshot = snapshot
+                }
             } catch {
                 self.onStatusMessage?("Failed to read Codex usage state: \(error.localizedDescription)")
             }

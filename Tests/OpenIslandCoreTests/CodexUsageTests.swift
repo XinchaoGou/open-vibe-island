@@ -4,6 +4,30 @@ import Testing
 
 struct CodexUsageTests {
     @Test
+    func codexUsageSnapshotMapsLiveAccountRateLimits() throws {
+        let capturedAt = Date(timeIntervalSince1970: 1_786_500_000)
+        let snapshot = CodexUsageSnapshot(
+            rateLimits: CodexAccountRateLimitSnapshot(
+                limitId: "codex",
+                planType: "prolite",
+                primary: CodexAccountRateLimitWindow(
+                    usedPercent: 12,
+                    windowDurationMins: 10_080,
+                    resetsAt: 1_787_016_987
+                ),
+                secondary: nil
+            ),
+            capturedAt: capturedAt
+        )
+
+        #expect(snapshot.sourceFilePath == CodexUsageSnapshot.appServerSourcePath)
+        #expect(snapshot.capturedAt == capturedAt)
+        #expect(snapshot.windows.map(\.label) == ["7d"])
+        #expect(snapshot.windows.first?.roundedUsedPercentage == 12)
+        #expect(snapshot.windows.first?.leftPercentage == 88)
+    }
+
+    @Test
     func codexUsageLoaderParsesLastTokenCountRateLimits() throws {
         let rootURL = temporaryRootURL(named: "codex-usage")
         let rolloutURL = rootURL

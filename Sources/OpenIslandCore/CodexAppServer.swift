@@ -76,7 +76,21 @@ public enum CodexAppServerNotification: Sendable {
     case threadNameUpdated(threadId: String, name: String?)
     case turnStarted(threadId: String, turn: CodexTurn)
     case turnCompleted(threadId: String, turn: CodexTurn)
+    case accountRateLimitsUpdated
     case unknown(method: String)
+}
+
+public struct CodexAccountRateLimitWindow: Codable, Sendable {
+    public let usedPercent: Int
+    public let windowDurationMins: Int?
+    public let resetsAt: Int?
+}
+
+public struct CodexAccountRateLimitSnapshot: Codable, Sendable {
+    public let limitId: String?
+    public let planType: String?
+    public let primary: CodexAccountRateLimitWindow?
+    public let secondary: CodexAccountRateLimitWindow?
 }
 
 // MARK: - JSON-RPC transport
@@ -191,10 +205,21 @@ public final class CodexAppServerClient: @unchecked Sendable {
     /// List all threads (including not-loaded) from the app-server.
     public func listThreads(limit: Int? = nil) async throws -> [CodexThread] {
         struct Params: Encodable { let limit: Int? }
-        struct Result: Decodable { let threads: [CodexThread] }
+        struct Result: Decodable { let data: [CodexThread] }
         let data = try await sendRequest(method: "thread/list", params: Params(limit: limit))
         let result = try JSONDecoder().decode(Result.self, from: data)
-        return result.threads
+        return result.data
+    }
+
+    public func readAccountRateLimits() async throws -> CodexAccountRateLimitSnapshot {
+        struct Result: Decodable {
+            let rateLimits: CodexAccountRateLimitSnapshot
+            let rateLimitsByLimitId: [String: CodexAccountRateLimitSnapshot]?
+        }
+
+        let data = try await sendRequestWithoutParams(method: "account/rateLimits/read")
+        let result = try JSONDecoder().decode(Result.self, from: data)
+        return result.rateLimitsByLimitId?["codex"] ?? result.rateLimits
     }
 
     // MARK: - JSON-RPC transport
@@ -205,6 +230,16 @@ public final class CodexAppServerClient: @unchecked Sendable {
         method: String,
         params: P
     ) async throws -> Data {
+        let paramsData = try JSONEncoder().encode(params)
+        let paramsObject = try JSONSerialization.jsonObject(with: paramsData)
+        return try await sendRequest(method: method, paramsObject: paramsObject)
+    }
+
+    private func sendRequestWithoutParams(method: String) async throws -> Data {
+        try await sendRequest(method: method, paramsObject: NSNull())
+    }
+
+    private func sendRequest(method: String, paramsObject: Any) async throws -> Data {
         guard let stdin else {
             throw CodexAppServerError.notConnected
         }
@@ -215,15 +250,11 @@ public final class CodexAppServerClient: @unchecked Sendable {
             return id
         }
 
-        // Encode params via JSONEncoder, then decode back to Any for
-        // JSONSerialization so we can embed it in the JSON-RPC envelope.
-        let paramsData = try JSONEncoder().encode(params)
-        let paramsObj = try JSONSerialization.jsonObject(with: paramsData)
         let envelope: [String: Any] = [
             "jsonrpc": "2.0",
             "id": requestID,
             "method": method,
-            "params": paramsObj,
+            "params": paramsObject,
         ]
         var line = try JSONSerialization.data(withJSONObject: envelope)
         line.append(contentsOf: [UInt8(ascii: "\n")])
@@ -345,6 +376,8 @@ public final class CodexAppServerClient: @unchecked Sendable {
         case "turn/completed":
             guard let n = try? decoder.decode(TurnNotificationParams.self, from: paramsData) else { return }
             notification = .turnCompleted(threadId: n.threadId, turn: n.turn)
+        case "account/rateLimits/updated":
+            notification = .accountRateLimitsUpdated
         default:
             notification = .unknown(method: method)
         }

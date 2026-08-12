@@ -12,6 +12,35 @@ import Testing
 ///    than letting `readBuffer` grow without bound.
 struct CodexAppServerBufferTests {
     @Test
+    func threadListDecodesCurrentDataEnvelope() async throws {
+        let client = CodexAppServerClient()
+        let pipe = Pipe()
+        client.stdin = pipe.fileHandleForWriting
+
+        let request = Task { try await client.listThreads(limit: 5) }
+        _ = pipe.fileHandleForReading.availableData
+        client.handleIncomingData(Data(#"{"id":1,"result":{"data":[],"nextCursor":null}}"#.appending("\n").utf8))
+
+        #expect(try await request.value.isEmpty)
+    }
+
+    @Test
+    func accountRateLimitsDecodeAuthoritativeCodexBucket() async throws {
+        let client = CodexAppServerClient()
+        let pipe = Pipe()
+        client.stdin = pipe.fileHandleForWriting
+
+        let request = Task { try await client.readAccountRateLimits() }
+        _ = pipe.fileHandleForReading.availableData
+        let response = #"{"id":1,"result":{"rateLimits":{"limitId":"fallback","planType":"prolite","primary":{"usedPercent":7,"windowDurationMins":10080,"resetsAt":1787016987},"secondary":null},"rateLimitsByLimitId":{"codex":{"limitId":"codex","planType":"prolite","primary":{"usedPercent":12,"windowDurationMins":10080,"resetsAt":1787016987},"secondary":null}}}}"#
+        client.handleIncomingData(Data(response.appending("\n").utf8))
+
+        let snapshot = try await request.value
+        #expect(snapshot.limitId == "codex")
+        #expect(snapshot.primary?.usedPercent == 12)
+    }
+
+    @Test
     func multiLineBurstIsFullyDrainedAndAllLinesParsed() {
         let client = CodexAppServerClient()
 
