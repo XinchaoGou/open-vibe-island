@@ -43,6 +43,10 @@
 "settings.general.languageEnglish" = "English";
 "settings.general.languageChinese" = "Chinese (Simplified)";
 "settings.general.languageTraditionalChinese" = "Chinese (Traditional)";
+"settings.general.hiddenSessions" = "Hidden Sessions";
+"settings.general.hiddenSessionsEmpty" = "No hidden sessions";
+"settings.general.hiddenSessionsFooter" = "This only affects Open Island. It does not delete or archive the original Codex task.";
+"settings.general.restoreSession" = "Restore";
 
 /* Settings - Personalization (v6) */
 "settings.tab.appearance" = "Personalization";
@@ -183,6 +187,8 @@
 
 /* Island Panel - Session List */
 "island.sessionList.title" = "Sessions";
+"island.session.hide" = "Hide from Island";
+"island.session.dismiss" = "Dismiss session";
 "island.sessionOverview.total" = "total";
 "island.sessionOverview.waiting" = "waiting";
 "island.sessionOverview.waitingCompact" = "wait";

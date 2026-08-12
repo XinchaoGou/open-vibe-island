@@ -225,6 +225,28 @@ struct GeneralSettingsPane: View {
                 ))
             }
 
+            Section {
+                if model.hiddenIslandSessions.isEmpty {
+                    Text(lang.t("settings.general.hiddenSessionsEmpty"))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.hiddenIslandSessions) { session in
+                        HStack {
+                            Text(session.title)
+                                .lineLimit(1)
+                            Spacer()
+                            Button(lang.t("settings.general.restoreSession")) {
+                                model.restoreSessionToIsland(session.id)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text(lang.t("settings.general.hiddenSessions"))
+            } footer: {
+                Text(lang.t("settings.general.hiddenSessionsFooter"))
+            }
+
         }
         .formStyle(.grouped)
         .navigationTitle(lang.t("settings.tab.general"))

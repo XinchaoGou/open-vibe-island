@@ -43,6 +43,10 @@
 "settings.general.languageEnglish" = "English";
 "settings.general.languageChinese" = "简体中文";
 "settings.general.languageTraditionalChinese" = "繁體中文";
+"settings.general.hiddenSessions" = "已隱藏的會話";
+"settings.general.hiddenSessionsEmpty" = "沒有隱藏的會話";
+"settings.general.hiddenSessionsFooter" = "只影響 Open Island，不會刪除或封存 Codex 中的原始任務。";
+"settings.general.restoreSession" = "恢復";
 
 /* Settings - Personalization (v6) */
 "settings.tab.appearance" = "個人化";
@@ -183,6 +187,8 @@
 
 /* Island Panel - Session List */
 "island.sessionList.title" = "會話";
+"island.session.hide" = "從島上隱藏";
+"island.session.dismiss" = "關閉會話";
 "island.sessionOverview.total" = "總計";
 "island.sessionOverview.waiting" = "等待";
 "island.sessionOverview.waitingCompact" = "待";

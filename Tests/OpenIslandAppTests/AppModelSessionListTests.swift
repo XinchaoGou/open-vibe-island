@@ -31,6 +31,42 @@ struct AppModelSessionListTests {
     }
 
     @Test
+    func hidingCompletedSessionRemovesItFromIslandAndPersists() throws {
+        let suiteName = "AppModelSessionListTests.hidden.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = IslandSessionVisibilityStore(defaults: defaults)
+        var session = AgentSession(
+            id: "old-codex-session",
+            title: "Add cy1 user",
+            tool: .codex,
+            origin: .live,
+            attachmentState: .stale,
+            phase: .completed,
+            summary: "Done",
+            updatedAt: .now
+        )
+        session.isCodexAppSession = true
+        session.isProcessAlive = true
+
+        let model = AppModel(sessionVisibilityStore: store)
+        model.state = SessionState(sessions: [session])
+        #expect(model.islandListSessions.map(\.id) == [session.id])
+
+        model.hideSessionFromIsland(session.id)
+        #expect(model.islandListSessions.isEmpty)
+
+        let relaunchedModel = AppModel(sessionVisibilityStore: store)
+        relaunchedModel.state = SessionState(sessions: [session])
+        #expect(relaunchedModel.islandListSessions.isEmpty)
+        #expect(relaunchedModel.hiddenIslandSessions.map(\.title) == ["Add cy1 user"])
+
+        relaunchedModel.restoreSessionToIsland(session.id)
+        #expect(relaunchedModel.islandListSessions.map(\.id) == [session.id])
+        #expect(relaunchedModel.hiddenIslandSessions.isEmpty)
+    }
+
+    @Test
     func islandListSessionsOnlyIncludeLiveAttachedSessions() {
         let now = Date(timeIntervalSince1970: 2_000)
         let model = AppModel()

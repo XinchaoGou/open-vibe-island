@@ -524,6 +524,11 @@ final class AppModel {
     @ObservationIgnored
     private let approvalNotificationDelay: Duration
 
+    @ObservationIgnored
+    private let sessionVisibilityStore: IslandSessionVisibilityStore
+
+    var hiddenIslandSessions: [HiddenIslandSession]
+
 
     @ObservationIgnored
     var harnessRuntimeMonitor: HarnessRuntimeMonitor? {
@@ -593,11 +598,14 @@ final class AppModel {
         isNotificationSessionAlreadyFrontmost: @escaping @Sendable (AgentSession) async -> Bool = { session in
             await ForegroundTerminalSessionProbe().matches(session: session)
         },
-        approvalNotificationDelay: Duration = .seconds(5)
+        approvalNotificationDelay: Duration = .seconds(5),
+        sessionVisibilityStore: IslandSessionVisibilityStore = IslandSessionVisibilityStore()
     ) {
         self.terminalJumpAction = terminalJumpAction
         self.isNotificationSessionAlreadyFrontmost = isNotificationSessionAlreadyFrontmost
         self.approvalNotificationDelay = approvalNotificationDelay
+        self.sessionVisibilityStore = sessionVisibilityStore
+        hiddenIslandSessions = sessionVisibilityStore.load()
         UserDefaults.standard.register(defaults: [
             Self.showDockIconDefaultsKey: true,
             Self.hapticFeedbackEnabledDefaultsKey: false,
@@ -1435,6 +1443,31 @@ final class AppModel {
         synchronizeSelection()
     }
 
+    func hideSessionFromIsland(_ sessionID: String) {
+        guard let session = state.session(id: sessionID),
+              session.phase == .completed else {
+            return
+        }
+
+        hiddenIslandSessions.removeAll { $0.id == sessionID }
+        hiddenIslandSessions.insert(
+            HiddenIslandSession(id: sessionID, title: session.title, hiddenAt: .now),
+            at: 0
+        )
+        sessionVisibilityStore.save(hiddenIslandSessions)
+        _cachedSessionBuckets = nil
+        synchronizeSelection()
+        refreshOverlayPlacementIfVisible()
+    }
+
+    func restoreSessionToIsland(_ sessionID: String) {
+        hiddenIslandSessions.removeAll { $0.id == sessionID }
+        sessionVisibilityStore.save(hiddenIslandSessions)
+        _cachedSessionBuckets = nil
+        synchronizeSelection()
+        refreshOverlayPlacementIfVisible()
+    }
+
     func answerQuestion(for sessionID: String, answer: QuestionPromptResponse) {
         guard let session = state.session(id: sessionID) else {
             return
@@ -1742,7 +1775,8 @@ final class AppModel {
 
     private func computeSessionBuckets() -> (primary: [AgentSession], overflow: [AgentSession]) {
         let now = Date.now
-        let rankedSessions = state.sessions.sorted { lhs, rhs in
+        let hiddenSessionIDs = Set(hiddenIslandSessions.map(\.id))
+        let rankedSessions = state.sessions.filter { !hiddenSessionIDs.contains($0.id) }.sorted { lhs, rhs in
             let lhsScore = displayPriority(for: lhs, now: now)
             let rhsScore = displayPriority(for: rhs, now: now)
 

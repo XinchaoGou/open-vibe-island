@@ -633,7 +633,8 @@ struct IslandPanelView: View {
                                 onReply: TerminalTextSender.canReply(to: session, enabled: model.completionReplyEnabled)
                                     ? { model.replyToSession(session, text: $0) } : nil,
                                 onJump: { model.jumpToSession(session) },
-                                onDismiss: session.isRemote ? { model.dismissSession(session.id) } : nil
+                                onDismiss: dismissAction(for: session),
+                                dismissLabel: dismissLabel(for: session)
                             )
                         }
                     }
@@ -657,6 +658,22 @@ struct IslandPanelView: View {
         case .running:
             return "\(session.id)|running"
         }
+    }
+
+    private func dismissAction(for session: AgentSession) -> (() -> Void)? {
+        if session.phase == .completed {
+            return { model.hideSessionFromIsland(session.id) }
+        }
+        if session.isRemote {
+            return { model.dismissSession(session.id) }
+        }
+        return nil
+    }
+
+    private func dismissLabel(for session: AgentSession) -> String? {
+        session.phase == .completed
+            ? model.lang.t("island.session.hide")
+            : model.lang.t("island.session.dismiss")
     }
 
     @ViewBuilder
@@ -683,7 +700,8 @@ struct IslandPanelView: View {
                         onReply: TerminalTextSender.canReply(to: session, enabled: model.completionReplyEnabled)
                             ? { model.replyToSession(session, text: $0) } : nil,
                         onJump: { model.jumpToSession(session) },
-                        onDismiss: session.isRemote ? { model.dismissSession(session.id) } : nil
+                        onDismiss: dismissAction(for: session),
+                        dismissLabel: dismissLabel(for: session)
                     )
                 }
             }
@@ -1194,6 +1212,7 @@ private struct IslandSessionRow: View {
     var onReply: ((String) -> Void)?
     let onJump: () -> Void
     var onDismiss: (() -> Void)?
+    var dismissLabel: String? = nil
 
     @State private var isHighlighted = false
     @State private var detailOverride: Bool?
@@ -1299,7 +1318,7 @@ private struct IslandSessionRow: View {
                     .frame(minWidth: 30, alignment: .trailing)
                 detailToggleButton(isOpen: showsDetail)
                 if let onDismiss {
-                    DismissButton(action: onDismiss)
+                    DismissButton(label: dismissLabel ?? "", action: onDismiss)
                 }
             }
         }
@@ -2713,6 +2732,7 @@ extension MarkdownUI.Theme {
 }
 
 private struct DismissButton: View {
+    let label: String
     let action: () -> Void
     @State private var isHovered = false
 
@@ -2723,6 +2743,8 @@ private struct DismissButton: View {
                 .foregroundStyle(.white.opacity(isHovered ? 0.8 : 0.4))
         }
         .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
         .onHover { isHovered = $0 }
     }
 }
