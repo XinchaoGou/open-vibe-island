@@ -34,6 +34,30 @@ struct AgentSessionPresentationTests {
     }
 
     @Test
+    func codexAppHeadlineHidesGeneratedWorkspaceForNonProjectTask() {
+        var session = AgentSession(
+            id: "codex-thread",
+            title: "Add cy1 user",
+            tool: .codex,
+            origin: .live,
+            attachmentState: .stale,
+            phase: .completed,
+            summary: "Done",
+            updatedAt: .now,
+            jumpTarget: JumpTarget(
+                terminalApp: "Codex.app",
+                workspaceName: "c-y",
+                paneTitle: "Add cy1 user",
+                workingDirectory: "/Users/test/Documents/Codex/2026-07-27/c-y",
+                codexThreadID: "codex-thread"
+            )
+        )
+        session.isCodexAppSession = true
+
+        #expect(session.spotlightHeadlineText == "Add cy1 user")
+    }
+
+    @Test
     func attachedCompletedSessionStaysActiveWhileRecent() {
         let referenceDate = Date(timeIntervalSince1970: 10_000)
         let session = AgentSession(

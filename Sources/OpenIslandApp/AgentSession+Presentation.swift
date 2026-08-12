@@ -171,6 +171,13 @@ extension AgentSession {
     }
 
     var spotlightHeadlineText: String {
+        if isCodexAppSession, isGeneratedCodexWorkspace {
+            let taskName = title.trimmedForSurface
+            if !taskName.isEmpty, taskName != "Codex" {
+                return taskName
+            }
+        }
+
         var headline = spotlightWorkspaceName
 
         if let branch = spotlightWorktreeBranch {
@@ -182,6 +189,28 @@ extension AgentSession {
         }
 
         return "\(headline) · \(prompt)"
+    }
+
+    private var isGeneratedCodexWorkspace: Bool {
+        guard let workingDirectory = jumpTarget?.workingDirectory else {
+            return false
+        }
+
+        let components = URL(fileURLWithPath: workingDirectory).standardized.pathComponents
+        guard components.count >= 4 else {
+            return false
+        }
+
+        let tail = components.suffix(4)
+        guard tail[tail.startIndex] == "Documents",
+              tail[tail.index(after: tail.startIndex)] == "Codex" else {
+            return false
+        }
+
+        let dateIndex = tail.index(tail.startIndex, offsetBy: 2)
+        let dateParts = tail[dateIndex].split(separator: "-", omittingEmptySubsequences: false)
+        return dateParts.map(\.count) == [4, 2, 2]
+            && dateParts.allSatisfy { $0.allSatisfy(\.isNumber) }
     }
 
     var spotlightHeadlinePromptText: String? {
