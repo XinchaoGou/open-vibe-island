@@ -111,7 +111,10 @@ extension AgentSession {
     }
 
     var spotlightTerminalBadge: String? {
-        jumpTarget?.terminalApp
+        if isCodexAppSession {
+            return nil
+        }
+        return jumpTarget?.terminalApp
     }
 
     var spotlightWorkspaceName: String {

@@ -30,6 +30,7 @@ struct AgentSessionPresentationTests {
         session.isProcessAlive = true
 
         #expect(session.spotlightHeadlineText == "RecogNet · 设计长期迭代管理系统")
+        #expect(session.spotlightTerminalBadge == nil)
     }
 
     @Test
