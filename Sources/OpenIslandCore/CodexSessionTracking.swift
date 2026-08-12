@@ -630,6 +630,9 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
         sessionMeta: SessionMeta?
     ) -> CodexTrackedSessionRecord? {
         guard let sessionMeta else { return nil }
+        guard !CodexRolloutReducer.isInternalSessionPrompt(snapshot.initialUserPrompt) else {
+            return nil
+        }
 
         let summary = snapshot.summary ?? sessionMeta.defaultSummary
         let updatedAt = snapshot.updatedAt ?? sessionMeta.timestamp ?? modifiedAt
@@ -1493,12 +1496,18 @@ public enum CodexRolloutReducer {
     }
 
     private static func isInjectedPromptBlock(_ text: String) -> Bool {
-        text.hasPrefix("# AGENTS.md instructions for ")
+        text.hasPrefix("# AGENTS.md instructions")
             || text.hasPrefix("<recommended_plugins>")
             || text.hasPrefix("<environment_context>")
             || text.hasPrefix("<permissions instructions>")
             || text.hasPrefix("<collaboration_mode>")
             || text.hasPrefix("<skills_instructions>")
+    }
+
+    static func isInternalSessionPrompt(_ text: String?) -> Bool {
+        guard let text else { return false }
+        return text.hasPrefix("The following is the Codex agent history whose request action you are assessing.")
+            || text.hasPrefix("The following is the Codex agent history added since your last approval assessment.")
     }
 
     private static func clipped(_ value: String?, limit: Int = 110) -> String? {

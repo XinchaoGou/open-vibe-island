@@ -20,7 +20,11 @@ final class CodexAppServerCoordinator {
     @ObservationIgnored
     private var lastRateLimitsRefreshAt = Date.distantPast
 
+    @ObservationIgnored
+    private var lastThreadSnapshotAt = Date.distantPast
+
     private static let rateLimitsRefreshInterval: TimeInterval = 60
+    private static let threadSnapshotInterval: TimeInterval = 10
 
     /// Callback to emit AgentEvents into AppModel.
     @ObservationIgnored
@@ -33,6 +37,10 @@ final class CodexAppServerCoordinator {
     /// Publishes authoritative account usage read directly from Codex.
     @ObservationIgnored
     var onUsageSnapshot: ((CodexUsageSnapshot) -> Void)?
+
+    /// Publishes Codex's authoritative task identity snapshot.
+    @ObservationIgnored
+    var onThreadSnapshot: (([CodexThread]) -> Void)?
 
     /// Returns `true` if a session with the given id is already tracked.
     /// Used to avoid re-emitting `sessionStarted` (which rebuilds the
@@ -100,18 +108,26 @@ final class CodexAppServerCoordinator {
         client = nil
         isConnected = false
         lastRateLimitsRefreshAt = .distantPast
+        lastThreadSnapshotAt = .distantPast
     }
 
     /// Refresh account usage while connected, throttled for the monitor's
     /// frequent maintenance cadence.
     func maintenanceTick(now: Date = .now) {
-        guard isConnected,
-              now.timeIntervalSince(lastRateLimitsRefreshAt) >= Self.rateLimitsRefreshInterval else {
-            return
+        guard isConnected else { return }
+
+        if now.timeIntervalSince(lastThreadSnapshotAt) >= Self.threadSnapshotInterval {
+            lastThreadSnapshotAt = now
+            Task { [weak self] in
+                await self?.syncRecentThreads()
+            }
         }
-        lastRateLimitsRefreshAt = now
-        Task { [weak self] in
-            await self?.refreshAccountRateLimits()
+
+        if now.timeIntervalSince(lastRateLimitsRefreshAt) >= Self.rateLimitsRefreshInterval {
+            lastRateLimitsRefreshAt = now
+            Task { [weak self] in
+                await self?.refreshAccountRateLimits()
+            }
         }
     }
 
@@ -119,11 +135,14 @@ final class CodexAppServerCoordinator {
 
     private func syncRecentThreads() async {
         guard let client else { return }
+        lastThreadSnapshotAt = .now
         do {
             let threads = try await client.listThreads(limit: 40)
             let cutoff = Int(Date.now.addingTimeInterval(-86_400).timeIntervalSince1970)
+            let recentThreads = threads.filter { !$0.ephemeral && $0.updatedAt >= cutoff }
+            onThreadSnapshot?(recentThreads)
             var created = 0
-            for thread in threads where !thread.ephemeral && thread.updatedAt >= cutoff {
+            for thread in recentThreads {
                 // Skip threads already tracked — re-emitting sessionStarted
                 // rebuilds the AgentSession and would wipe richer state
                 // already accumulated from hooks or rediscovery.

@@ -677,6 +677,15 @@ final class AppModel {
         codexAppServer.onUsageSnapshot = { [weak self] snapshot in
             self?.hooks.codexUsageSnapshot = snapshot
         }
+        codexAppServer.onThreadSnapshot = { [weak self] threads in
+            guard let self else { return }
+            var updatedState = self.state
+            guard updatedState.reconcileCodexAppThreadSnapshot(threads) else { return }
+            self.state = updatedState
+            self.synchronizeSelection()
+            self.refreshOverlayPlacementIfVisible()
+            self.discovery.scheduleCodexSessionPersistence()
+        }
         codexAppServer.isSessionTracked = { [weak self] id in
             self?.state.session(id: id) != nil
         }

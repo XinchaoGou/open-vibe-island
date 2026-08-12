@@ -182,9 +182,19 @@ extension AgentSession {
     }
 
     var spotlightHeadlinePromptText: String? {
-        // Headline shows the initial prompt (session topic), not the latest.
-        // The latest prompt is shown separately in the "You:" line.
-        initialPromptText ?? latestPromptText
+        // Codex Desktop already generates a concise task name. Prefer that
+        // identity over replaying the first (often injected) prompt.
+        if isCodexAppSession {
+            let taskName = title.trimmedForSurface
+            let generatedFallback = "Codex · \(spotlightWorkspaceName)"
+            if !taskName.isEmpty, taskName != generatedFallback, taskName != "Codex" {
+                return taskName
+            }
+        }
+
+        // Other surfaces use the initial prompt as the session topic. The
+        // latest prompt is shown separately in the "You:" line.
+        return initialPromptText ?? latestPromptText
     }
 
     var spotlightPromptText: String? {

@@ -5,6 +5,75 @@ import Testing
 
 /// Regression coverage for core session lifecycle and visibility behavior.
 struct SessionStateTests {
+    @Test
+    func codexThreadSnapshotAppliesOfficialNameAndRemovesInternalRows() {
+        let updatedAt = Date(timeIntervalSince1970: 1_000)
+        var userSession = AgentSession(
+            id: "user-thread",
+            title: "Codex · RecogNet",
+            tool: .codex,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .completed,
+            summary: "Done",
+            updatedAt: updatedAt,
+            jumpTarget: JumpTarget(
+                terminalApp: "Codex.app",
+                workspaceName: "RecogNet",
+                paneTitle: "Codex · RecogNet",
+                workingDirectory: "/tmp/RecogNet",
+                codexThreadID: "user-thread"
+            ),
+            codexMetadata: CodexSessionMetadata(
+                initialUserPrompt: "帮我看看，我怎么更好管理这个迭代"
+            )
+        )
+        userSession.isCodexAppSession = true
+        userSession.isProcessAlive = true
+
+        var approvalReviewer = AgentSession(
+            id: "approval-reviewer",
+            title: "Codex · new-chat",
+            tool: .codex,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .completed,
+            summary: #"{"risk_level":"medium","outcome":"allow"}"#,
+            updatedAt: updatedAt,
+            jumpTarget: JumpTarget(
+                terminalApp: "Codex.app",
+                workspaceName: "new-chat",
+                paneTitle: "Codex · new-chat",
+                codexThreadID: "approval-reviewer"
+            )
+        )
+        approvalReviewer.isCodexAppSession = true
+        approvalReviewer.isProcessAlive = true
+
+        let thread = CodexThread(
+            id: "user-thread",
+            cwd: "/tmp/RecogNet",
+            name: "设计长期迭代管理系统",
+            preview: "帮我看看，我怎么更好管理这个迭代",
+            modelProvider: "openai",
+            createdAt: 900,
+            updatedAt: 1_000,
+            ephemeral: false,
+            path: "/tmp/rollout-user-thread.jsonl",
+            status: CodexThreadStatus(type: .idle, activeFlags: nil),
+            source: .vscode,
+            turns: []
+        )
+
+        var state = SessionState(sessions: [userSession, approvalReviewer])
+        let changed = state.reconcileCodexAppThreadSnapshot([thread])
+        #expect(changed)
+
+        #expect(state.session(id: "user-thread")?.title == "设计长期迭代管理系统")
+        #expect(state.session(id: "user-thread")?.codexMetadata?.initialUserPrompt == thread.preview)
+        #expect(state.session(id: "approval-reviewer") == nil)
+    }
+
     /// Completed Codex CLI sessions outside Codex.app should age out even while Codex.app is running.
     @Test
     func completedCodexCLISessionEndsEvenWhenCodexAppIsRunning() {

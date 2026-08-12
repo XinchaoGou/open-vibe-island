@@ -5,6 +5,34 @@ import OpenIslandCore
 
 struct AgentSessionPresentationTests {
     @Test
+    func codexAppHeadlineUsesCodexTaskNameInsteadOfInitialPrompt() {
+        var session = AgentSession(
+            id: "codex-thread",
+            title: "设计长期迭代管理系统",
+            tool: .codex,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .completed,
+            summary: "Done",
+            updatedAt: .now,
+            jumpTarget: JumpTarget(
+                terminalApp: "Codex.app",
+                workspaceName: "RecogNet",
+                paneTitle: "设计长期迭代管理系统",
+                workingDirectory: "/tmp/RecogNet",
+                codexThreadID: "codex-thread"
+            ),
+            codexMetadata: CodexSessionMetadata(
+                initialUserPrompt: "帮我看看，我怎么更好管理这个迭代"
+            )
+        )
+        session.isCodexAppSession = true
+        session.isProcessAlive = true
+
+        #expect(session.spotlightHeadlineText == "RecogNet · 设计长期迭代管理系统")
+    }
+
+    @Test
     func attachedCompletedSessionStaysActiveWhileRecent() {
         let referenceDate = Date(timeIntervalSince1970: 10_000)
         let session = AgentSession(
