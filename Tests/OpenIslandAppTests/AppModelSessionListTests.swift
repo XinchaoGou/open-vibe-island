@@ -108,6 +108,36 @@ struct AppModelSessionListTests {
     }
 
     @Test
+    func hiddenSessionReturnsWhenStartupSyncFindsItRunning() throws {
+        let suiteName = "AppModelSessionListTests.hiddenStartup.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = IslandSessionVisibilityStore(defaults: defaults)
+        var session = AgentSession(
+            id: "offline-resumed-session",
+            title: "Old task",
+            tool: .codex,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .completed,
+            summary: "Done",
+            updatedAt: .now
+        )
+        session.isCodexAppSession = true
+        session.isProcessAlive = true
+        let firstModel = AppModel(sessionVisibilityStore: store)
+        firstModel.state = SessionState(sessions: [session])
+        firstModel.hideSessionFromIsland(session.id)
+
+        session.phase = .running
+        let relaunchedModel = AppModel(sessionVisibilityStore: store)
+        relaunchedModel.state = SessionState(sessions: [session])
+
+        #expect(relaunchedModel.islandListSessions.map(\.id) == [session.id])
+        #expect(relaunchedModel.hiddenIslandSessions.isEmpty)
+    }
+
+    @Test
     func islandListSessionsOnlyIncludeLiveAttachedSessions() {
         let now = Date(timeIntervalSince1970: 2_000)
         let model = AppModel()

@@ -46,6 +46,7 @@ final class AppModel {
 
     var state = SessionState() {
         didSet {
+            restoreHiddenSessionsThatBecameActive()
             _cachedSessionBuckets = nil
             pruneAgentsGridObservationTicketsIfNeeded()
             bridgeServer.updateStateSnapshot(state)
@@ -1466,6 +1467,18 @@ final class AppModel {
         _cachedSessionBuckets = nil
         synchronizeSelection()
         refreshOverlayPlacementIfVisible()
+    }
+
+    private func restoreHiddenSessionsThatBecameActive() {
+        let activeHiddenIDs = Set(state.sessions.lazy
+            .filter { $0.phase != .completed }
+            .map(\.id))
+        guard hiddenIslandSessions.contains(where: { activeHiddenIDs.contains($0.id) }) else {
+            return
+        }
+
+        hiddenIslandSessions.removeAll { activeHiddenIDs.contains($0.id) }
+        sessionVisibilityStore.save(hiddenIslandSessions)
     }
 
     func answerQuestion(for sessionID: String, answer: QuestionPromptResponse) {
