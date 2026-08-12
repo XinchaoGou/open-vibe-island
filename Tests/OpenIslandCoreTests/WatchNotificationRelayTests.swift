@@ -65,6 +65,81 @@ struct WatchNotificationRelayTests {
     }
 
     @Test
+    func completionCancelsDelayedApprovalNotification() async throws {
+        let relay = WatchNotificationRelay(permissionNotificationDelay: .milliseconds(50))
+        let session = AgentSession(
+            id: "completed-before-approval",
+            title: "Completed",
+            tool: .codex,
+            phase: .running,
+            summary: "Working",
+            updatedAt: .now
+        )
+
+        relay.notifyEvent(
+            .permissionRequested(
+                PermissionRequested(
+                    sessionID: session.id,
+                    request: PermissionRequest(
+                        title: "Run command",
+                        summary: "Needs permission",
+                        affectedPath: "/tmp"
+                    ),
+                    timestamp: .now
+                )
+            ),
+            session: session
+        )
+        relay.notifyEvent(
+            .sessionCompleted(
+                SessionCompleted(sessionID: session.id, summary: "Done", timestamp: .now)
+            ),
+            session: session
+        )
+
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(relay.pendingRequestCountForTests(sessionID: session.id) == 0)
+    }
+
+    @Test
+    func completionClearsPublishedApprovalNotification() {
+        let relay = WatchNotificationRelay(permissionNotificationDelay: .zero)
+        let session = AgentSession(
+            id: "completed-after-approval",
+            title: "Completed",
+            tool: .codex,
+            phase: .running,
+            summary: "Working",
+            updatedAt: .now
+        )
+
+        relay.notifyEvent(
+            .permissionRequested(
+                PermissionRequested(
+                    sessionID: session.id,
+                    request: PermissionRequest(
+                        title: "Run command",
+                        summary: "Needs permission",
+                        affectedPath: "/tmp"
+                    ),
+                    timestamp: .now
+                )
+            ),
+            session: session
+        )
+        #expect(relay.pendingRequestCountForTests(sessionID: session.id) == 1)
+
+        relay.notifyEvent(
+            .sessionCompleted(
+                SessionCompleted(sessionID: session.id, summary: "Done", timestamp: .now)
+            ),
+            session: session
+        )
+
+        #expect(relay.pendingRequestCountForTests(sessionID: session.id) == 0)
+    }
+
+    @Test
     func resolvingActionableStateClearsAllPendingRequestsForSession() {
         let relay = WatchNotificationRelay(permissionNotificationDelay: .zero)
         let session = AgentSession(

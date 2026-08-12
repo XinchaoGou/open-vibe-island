@@ -52,6 +52,7 @@ public final class WatchNotificationRelay: @unchecked Sendable {
 
         case let .sessionCompleted(payload):
             guard let session else { return }
+            resolvePendingRequests(forSession: payload.sessionID)
             let sseEvent = WatchSSEEvent.sessionCompleted(WatchCompletionEvent(
                 sessionID: payload.sessionID,
                 agentTool: session.tool.displayName,
@@ -61,26 +62,7 @@ public final class WatchNotificationRelay: @unchecked Sendable {
             Self.logger.info("Pushed sessionCompleted for session \(payload.sessionID)")
 
         case let .actionableStateResolved(payload):
-            cancelPendingPermissionNotification(forSession: payload.sessionID)
-            // Find and remove ALL pending requests for this session, notifying
-            // iPhone for each one. A single session can have multiple pending
-            // entries when subagents fan out permission/question prompts in
-            // parallel; the previous one-at-a-time removal silently leaked
-            // every entry past the first and left the watch UI showing stale
-            // pending requests.
-            let requestIDs = removeAllPendingRequests(forSession: payload.sessionID)
-            if requestIDs.isEmpty {
-                Self.logger.debug("No pending request found for resolved session \(payload.sessionID)")
-            } else {
-                for requestID in requestIDs {
-                    let resolvedEvent = WatchSSEEvent.actionableStateResolved(WatchResolvedEvent(
-                        requestID: requestID,
-                        sessionID: payload.sessionID
-                    ))
-                    endpoint.pushEvent(resolvedEvent)
-                }
-                Self.logger.info("Pushed actionableStateResolved for \(requestIDs.count) request(s) on session \(payload.sessionID)")
-            }
+            resolvePendingRequests(forSession: payload.sessionID)
 
         default:
             break
@@ -191,6 +173,27 @@ public final class WatchNotificationRelay: @unchecked Sendable {
             }
             return matchingKeys
         }
+    }
+
+    private func resolvePendingRequests(forSession sessionID: String) {
+        cancelPendingPermissionNotification(forSession: sessionID)
+
+        // Remove ALL pending requests for this session. A single session can
+        // have multiple pending entries when subagents fan out permission
+        // prompts in parallel.
+        let requestIDs = removeAllPendingRequests(forSession: sessionID)
+        if requestIDs.isEmpty {
+            Self.logger.debug("No pending request found for resolved session \(sessionID)")
+            return
+        }
+
+        for requestID in requestIDs {
+            endpoint.pushEvent(.actionableStateResolved(WatchResolvedEvent(
+                requestID: requestID,
+                sessionID: sessionID
+            )))
+        }
+        Self.logger.info("Pushed actionableStateResolved for \(requestIDs.count) request(s) on session \(sessionID)")
     }
 
     /// Test-only accessor for verifying pending-request cleanup.
