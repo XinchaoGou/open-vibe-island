@@ -67,6 +67,47 @@ struct AppModelSessionListTests {
     }
 
     @Test
+    func hiddenCompletedSessionReturnsWhenItNeedsAttention() throws {
+        let suiteName = "AppModelSessionListTests.hiddenAttention.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = AppModel(sessionVisibilityStore: IslandSessionVisibilityStore(defaults: defaults))
+        var session = AgentSession(
+            id: "resumed-codex-session",
+            title: "Old task",
+            tool: .codex,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .completed,
+            summary: "Done",
+            updatedAt: .now
+        )
+        session.isCodexAppSession = true
+        session.isProcessAlive = true
+        model.state = SessionState(sessions: [session])
+        model.hideSessionFromIsland(session.id)
+        #expect(model.islandListSessions.isEmpty)
+
+        model.applyTrackedEvent(
+            .permissionRequested(
+                PermissionRequested(
+                    sessionID: session.id,
+                    request: PermissionRequest(
+                        title: "Approval Required",
+                        summary: "Needs approval",
+                        affectedPath: ""
+                    ),
+                    timestamp: .now
+                )
+            ),
+            updateLastActionMessage: false
+        )
+
+        #expect(model.islandListSessions.map(\.id) == [session.id])
+        #expect(model.hiddenIslandSessions.isEmpty)
+    }
+
+    @Test
     func islandListSessionsOnlyIncludeLiveAttachedSessions() {
         let now = Date(timeIntervalSince1970: 2_000)
         let model = AppModel()

@@ -45,7 +45,7 @@
 "settings.general.languageTraditionalChinese" = "Chinese (Traditional)";
 "settings.general.hiddenSessions" = "Hidden Sessions";
 "settings.general.hiddenSessionsEmpty" = "No hidden sessions";
-"settings.general.hiddenSessionsFooter" = "This only affects Open Island. It does not delete or archive the original Codex task.";
+"settings.general.hiddenSessionsFooter" = "This only affects Open Island. It does not delete or archive the source task.";
 "settings.general.restoreSession" = "Restore";
 
 /* Settings - Personalization (v6) */

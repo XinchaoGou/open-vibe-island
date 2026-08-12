@@ -661,19 +661,19 @@ struct IslandPanelView: View {
     }
 
     private func dismissAction(for session: AgentSession) -> (() -> Void)? {
-        if session.phase == .completed {
-            return { model.hideSessionFromIsland(session.id) }
-        }
         if session.isRemote {
             return { model.dismissSession(session.id) }
+        }
+        if session.phase == .completed {
+            return { model.hideSessionFromIsland(session.id) }
         }
         return nil
     }
 
     private func dismissLabel(for session: AgentSession) -> String? {
-        session.phase == .completed
-            ? model.lang.t("island.session.hide")
-            : model.lang.t("island.session.dismiss")
+        session.isRemote
+            ? model.lang.t("island.session.dismiss")
+            : model.lang.t("island.session.hide")
     }
 
     @ViewBuilder

@@ -45,7 +45,7 @@
 "settings.general.languageTraditionalChinese" = "繁體中文";
 "settings.general.hiddenSessions" = "已隐藏的会话";
 "settings.general.hiddenSessionsEmpty" = "没有隐藏的会话";
-"settings.general.hiddenSessionsFooter" = "只影响 Open Island，不会删除或归档 Codex 中的原任务。";
+"settings.general.hiddenSessionsFooter" = "只影响 Open Island，不会删除或归档原任务。";
 "settings.general.restoreSession" = "恢复";
 
 /* Settings - Personalization (v6) */

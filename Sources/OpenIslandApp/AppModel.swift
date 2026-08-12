@@ -1553,6 +1553,11 @@ final class AppModel {
         }
 
         state.apply(event)
+        if let sessionID = event.sessionIDForIslandVisibility,
+           state.session(id: sessionID)?.phase != .completed,
+           hiddenIslandSessions.contains(where: { $0.id == sessionID }) {
+            restoreSessionToIsland(sessionID)
+        }
         switch event {
         case let .actionableStateResolved(payload):
             approvalNotificationTasksBySessionID.removeValue(forKey: payload.sessionID)?.cancel()
@@ -1915,6 +1920,25 @@ final class AppModel {
         NSApplication.shared.terminate(nil)
     }
 
+}
+
+private extension AgentEvent {
+    var sessionIDForIslandVisibility: String? {
+        switch self {
+        case let .sessionStarted(payload): payload.sessionID
+        case let .activityUpdated(payload): payload.sessionID
+        case let .permissionRequested(payload): payload.sessionID
+        case let .questionAsked(payload): payload.sessionID
+        case let .sessionCompleted(payload): payload.sessionID
+        case let .jumpTargetUpdated(payload): payload.sessionID
+        case let .sessionMetadataUpdated(payload): payload.sessionID
+        case let .claudeSessionMetadataUpdated(payload): payload.sessionID
+        case let .geminiSessionMetadataUpdated(payload): payload.sessionID
+        case let .openCodeSessionMetadataUpdated(payload): payload.sessionID
+        case let .cursorSessionMetadataUpdated(payload): payload.sessionID
+        case let .actionableStateResolved(payload): payload.sessionID
+        }
+    }
 }
 
 // MARK: - Hex color helpers
