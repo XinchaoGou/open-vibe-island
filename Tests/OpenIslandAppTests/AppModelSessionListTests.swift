@@ -108,7 +108,7 @@ struct AppModelSessionListTests {
     }
 
     @Test
-    func hiddenSessionReturnsWhenStartupSyncFindsItRunning() throws {
+    func hiddenSessionStaysHiddenWhenStartupSyncTemporarilyMarksItRunning() throws {
         let suiteName = "AppModelSessionListTests.hiddenStartup.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -133,8 +133,8 @@ struct AppModelSessionListTests {
         let relaunchedModel = AppModel(sessionVisibilityStore: store)
         relaunchedModel.state = SessionState(sessions: [session])
 
-        #expect(relaunchedModel.islandListSessions.map(\.id) == [session.id])
-        #expect(relaunchedModel.hiddenIslandSessions.isEmpty)
+        #expect(relaunchedModel.islandListSessions.isEmpty)
+        #expect(relaunchedModel.hiddenIslandSessions.map(\.id) == [session.id])
     }
 
     @Test

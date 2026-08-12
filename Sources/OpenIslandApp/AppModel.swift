@@ -46,7 +46,7 @@ final class AppModel {
 
     var state = SessionState() {
         didSet {
-            restoreHiddenSessionsThatBecameActive()
+            restoreHiddenSessionsThatNeedAttention()
             _cachedSessionBuckets = nil
             pruneAgentsGridObservationTicketsIfNeeded()
             bridgeServer.updateStateSnapshot(state)
@@ -1472,9 +1472,9 @@ final class AppModel {
         refreshOverlayPlacementIfVisible()
     }
 
-    private func restoreHiddenSessionsThatBecameActive() {
+    private func restoreHiddenSessionsThatNeedAttention() {
         let activeHiddenIDs = Set(state.sessions.lazy
-            .filter { $0.phase != .completed }
+            .filter { $0.phase.requiresAttention }
             .map(\.id))
         guard hiddenIslandSessions.contains(where: { activeHiddenIDs.contains($0.id) }) else {
             return
@@ -1570,7 +1570,7 @@ final class AppModel {
 
         state.apply(event)
         if let sessionID = event.sessionIDForIslandVisibility,
-           state.session(id: sessionID)?.phase != .completed,
+           state.session(id: sessionID)?.phase.requiresAttention == true,
            hiddenIslandSessions.contains(where: { $0.id == sessionID }) {
             restoreSessionToIsland(sessionID)
         }

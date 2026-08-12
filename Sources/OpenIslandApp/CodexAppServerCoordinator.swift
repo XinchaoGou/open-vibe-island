@@ -413,9 +413,20 @@ final class CodexAppServerCoordinator {
     // MARK: - Helpers
 
     private func emitSessionStarted(from thread: CodexThread, remoteHost: String?) {
+        onEvent?(.sessionStarted(Self.sessionStarted(from: thread, remoteHost: remoteHost)))
+    }
+
+    static func sessionStarted(
+        from thread: CodexThread,
+        remoteHost: String?,
+        observedAt: Date = .now
+    ) -> SessionStarted {
         let workspaceName = URL(fileURLWithPath: thread.cwd).lastPathComponent
         let title = thread.name ?? workspaceName
         let summary = thread.preview.isEmpty ? "Codex session." : String(thread.preview.prefix(120))
+        let updatedAt = thread.updatedAt > 0
+            ? Date(timeIntervalSince1970: TimeInterval(thread.updatedAt))
+            : observedAt
 
         let phase: SessionPhase
         switch thread.status.type {
@@ -424,30 +435,28 @@ final class CodexAppServerCoordinator {
         case .notLoaded, .systemError: phase = .completed
         }
 
-        onEvent?(.sessionStarted(
-            SessionStarted(
-                sessionID: thread.id,
-                title: title,
-                tool: .codex,
-                origin: .live,
-                initialPhase: phase,
-                summary: summary,
-                timestamp: .now,
-                jumpTarget: JumpTarget(
-                    terminalApp: "Codex.app",
-                    workspaceName: workspaceName,
-                    paneTitle: title,
-                    workingDirectory: thread.cwd,
-                    codexThreadID: thread.id,
-                    codexRemoteHost: remoteHost
-                ),
-                codexMetadata: CodexSessionMetadata(
-                    transcriptPath: thread.path,
-                    initialUserPrompt: thread.preview.isEmpty ? nil : thread.preview,
-                    remoteHost: remoteHost
-                ),
-                isRemote: remoteHost != nil
-            )
-        ))
+        return SessionStarted(
+            sessionID: thread.id,
+            title: title,
+            tool: .codex,
+            origin: .live,
+            initialPhase: phase,
+            summary: summary,
+            timestamp: updatedAt,
+            jumpTarget: JumpTarget(
+                terminalApp: "Codex.app",
+                workspaceName: workspaceName,
+                paneTitle: title,
+                workingDirectory: thread.cwd,
+                codexThreadID: thread.id,
+                codexRemoteHost: remoteHost
+            ),
+            codexMetadata: CodexSessionMetadata(
+                transcriptPath: thread.path,
+                initialUserPrompt: thread.preview.isEmpty ? nil : thread.preview,
+                remoteHost: remoteHost
+            ),
+            isRemote: remoteHost != nil
+        )
     }
 }
