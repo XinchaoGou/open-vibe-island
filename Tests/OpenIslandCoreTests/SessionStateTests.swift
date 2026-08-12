@@ -6,6 +6,50 @@ import Testing
 /// Regression coverage for core session lifecycle and visibility behavior.
 struct SessionStateTests {
     @Test
+    func codexThreadSnapshotsAreAuthoritativeOnlyWithinTheirHost() {
+        var local = AgentSession(
+            id: "local-thread",
+            title: "Local",
+            tool: .codex,
+            phase: .completed,
+            summary: "Idle",
+            updatedAt: .now,
+            jumpTarget: JumpTarget(
+                terminalApp: "Codex.app",
+                workspaceName: "local",
+                paneTitle: "Local"
+            )
+        )
+        local.isCodexAppSession = true
+
+        var remote = AgentSession(
+            id: "remote-thread",
+            title: "Remote",
+            tool: .codex,
+            phase: .running,
+            summary: "Working",
+            updatedAt: .now,
+            jumpTarget: JumpTarget(
+                terminalApp: "Codex.app",
+                workspaceName: "remote",
+                paneTitle: "Remote"
+            ),
+            codexMetadata: CodexSessionMetadata(remoteHost: "station")
+        )
+        remote.isCodexAppSession = true
+        remote.isRemote = true
+
+        var state = SessionState(sessions: [local, remote])
+        _ = state.reconcileCodexAppThreadSnapshot([], remoteHost: nil)
+
+        #expect(state.session(id: "local-thread") == nil)
+        #expect(state.session(id: "remote-thread") != nil)
+
+        _ = state.reconcileCodexAppThreadSnapshot([], remoteHost: "station")
+        #expect(state.session(id: "remote-thread") == nil)
+    }
+
+    @Test
     func codexThreadSnapshotAppliesOfficialNameAndRemovesInternalRows() {
         let updatedAt = Date(timeIntervalSince1970: 1_000)
         var userSession = AgentSession(

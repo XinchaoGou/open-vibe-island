@@ -448,12 +448,17 @@ public struct SessionState: Equatable, Sendable {
     /// snapshot owns task identity (including Codex-generated names) and
     /// excludes internal helper threads that never appear in `thread/list`.
     @discardableResult
-    public mutating func reconcileCodexAppThreadSnapshot(_ threads: [CodexThread]) -> Bool {
+    public mutating func reconcileCodexAppThreadSnapshot(
+        _ threads: [CodexThread],
+        remoteHost: String? = nil
+    ) -> Bool {
         let before = sessionsByID
         let threadIDs = Set(threads.map(\.id))
 
         sessionsByID = sessionsByID.filter { _, session in
-            !session.isCodexAppSession || threadIDs.contains(session.id)
+            guard session.isCodexAppSession else { return true }
+            guard session.codexMetadata?.remoteHost == remoteHost else { return true }
+            return threadIDs.contains(session.id)
         }
 
         for thread in threads {
@@ -482,11 +487,13 @@ public struct SessionState: Equatable, Sendable {
 
             var metadata = session.codexMetadata ?? CodexSessionMetadata()
             metadata.transcriptPath = thread.path ?? metadata.transcriptPath
+            metadata.remoteHost = remoteHost
             if !thread.preview.isEmpty {
                 metadata.initialUserPrompt = thread.preview
             }
             session.codexMetadata = metadata.isEmpty ? nil : metadata
             session.isCodexAppSession = true
+            session.isRemote = remoteHost != nil
             session.isProcessAlive = true
             session.isSessionEnded = false
             sessionsByID[thread.id] = session

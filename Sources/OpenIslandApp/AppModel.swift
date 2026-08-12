@@ -694,10 +694,13 @@ final class AppModel {
         codexAppServer.onUsageSnapshot = { [weak self] snapshot in
             self?.hooks.codexUsageSnapshot = snapshot
         }
-        codexAppServer.onThreadSnapshot = { [weak self] threads in
+        codexAppServer.onThreadSnapshot = { [weak self] threads, remoteHost in
             guard let self else { return }
             var updatedState = self.state
-            guard updatedState.reconcileCodexAppThreadSnapshot(threads) else { return }
+            guard updatedState.reconcileCodexAppThreadSnapshot(
+                threads,
+                remoteHost: remoteHost
+            ) else { return }
             self.state = updatedState
             self.synchronizeSelection()
             self.refreshOverlayPlacementIfVisible()

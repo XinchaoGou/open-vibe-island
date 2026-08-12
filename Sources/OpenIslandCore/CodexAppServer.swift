@@ -93,13 +93,20 @@ public struct CodexAccountRateLimitSnapshot: Codable, Sendable {
     public let secondary: CodexAccountRateLimitWindow?
 }
 
+public enum CodexAppServerTransport: Sendable {
+    case jsonLines
+    case webSocket
+}
+
 // MARK: - JSON-RPC transport
 
 /// A lightweight JSON-RPC client that communicates with Codex app-server
 /// over a stdio-based `Process`.  Uses newline-delimited JSON messages
 /// (one JSON object per line, no Content-Length framing).
 public final class CodexAppServerClient: @unchecked Sendable {
-    private let codexPath: String
+    private let executablePath: String
+    private let arguments: [String]
+    private let transport: CodexAppServerTransport
     private var process: Process?
     /// Internal access so tests can inject a discard `Pipe` and drive
     /// the request path without launching a real codex subprocess.
@@ -110,6 +117,10 @@ public final class CodexAppServerClient: @unchecked Sendable {
     /// caller rather than pin its `Task` forever.
     var requestTimeoutSeconds: TimeInterval = 30
     private var readBuffer = Data()
+    private var webSocketUpgraded = false
+    private var webSocketHandshakeContinuation: CheckedContinuation<Void, any Error>?
+    private var fragmentedOpcode: UInt8?
+    private var fragmentedPayload = Data()
 
     /// Test-only accessor for asserting buffer state after `handleIncomingData`.
     var readBufferCountForTests: Int {
@@ -122,7 +133,19 @@ public final class CodexAppServerClient: @unchecked Sendable {
     public var onNotification: (@Sendable (CodexAppServerNotification) -> Void)?
 
     public init(codexPath: String = "/Applications/Codex.app/Contents/Resources/codex") {
-        self.codexPath = codexPath
+        self.executablePath = codexPath
+        self.arguments = ["app-server", "--listen", "stdio://"]
+        self.transport = .jsonLines
+    }
+
+    public init(
+        executablePath: String,
+        arguments: [String],
+        transport: CodexAppServerTransport
+    ) {
+        self.executablePath = executablePath
+        self.arguments = arguments
+        self.transport = transport
     }
 
     public var isRunning: Bool {
@@ -136,8 +159,8 @@ public final class CodexAppServerClient: @unchecked Sendable {
         guard !isRunning else { return }
 
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: codexPath)
-        proc.arguments = ["app-server", "--listen", "stdio://"]
+        proc.executableURL = URL(fileURLWithPath: executablePath)
+        proc.arguments = arguments
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -163,6 +186,10 @@ public final class CodexAppServerClient: @unchecked Sendable {
 
         try proc.run()
 
+        if transport == .webSocket {
+            try await performWebSocketUpgrade()
+        }
+
         // Send initialize request.
         struct InitializeParams: Encodable {
             struct ClientInfo: Encodable {
@@ -175,6 +202,7 @@ public final class CodexAppServerClient: @unchecked Sendable {
             method: "initialize",
             params: InitializeParams(clientInfo: .init(name: "OpenIsland", version: "1.0.0"))
         )
+        sendNotification(method: "initialized")
     }
 
     /// Stop the app-server subprocess.
@@ -185,10 +213,13 @@ public final class CodexAppServerClient: @unchecked Sendable {
         lock.lock()
         let pending = pendingRequests
         pendingRequests.removeAll()
+        let handshake = webSocketHandshakeContinuation
+        webSocketHandshakeContinuation = nil
         lock.unlock()
         for (_, continuation) in pending {
             continuation.resume(throwing: CodexAppServerError.disconnected)
         }
+        handshake?.resume(throwing: CodexAppServerError.disconnected)
     }
 
     // MARK: - Requests
@@ -256,8 +287,8 @@ public final class CodexAppServerClient: @unchecked Sendable {
             "method": method,
             "params": paramsObject,
         ]
-        var line = try JSONSerialization.data(withJSONObject: envelope)
-        line.append(contentsOf: [UInt8(ascii: "\n")])
+        let message = try JSONSerialization.data(withJSONObject: envelope)
+        let outgoingData = framedOutgoingData(message)
 
         // Race the response continuation against a timeout task.
         // Without this, a wedged app-server (no disconnect, no reply)
@@ -279,8 +310,64 @@ public final class CodexAppServerClient: @unchecked Sendable {
             lock.lock()
             pendingRequests[requestID] = continuation
             lock.unlock()
-            stdin.write(line)
+            stdin.write(outgoingData)
         }
+    }
+
+    private func sendNotification(method: String) {
+        guard let stdin,
+              let message = try? JSONSerialization.data(withJSONObject: ["method": method])
+        else { return }
+        stdin.write(framedOutgoingData(message))
+    }
+
+    private func framedOutgoingData(_ message: Data) -> Data {
+        switch transport {
+        case .jsonLines:
+            var line = message
+            line.append(UInt8(ascii: "\n"))
+            return line
+        case .webSocket:
+            return CodexWebSocketCodec.clientFrame(opcode: 0x1, payload: message)
+        }
+    }
+
+    private func performWebSocketUpgrade() async throws {
+        guard let stdin else { throw CodexAppServerError.notConnected }
+        let key = Data((0..<16).map { _ in UInt8.random(in: .min ... .max) }).base64EncodedString()
+        let request = """
+        GET / HTTP/1.1\r
+        Host: localhost\r
+        Upgrade: websocket\r
+        Connection: Upgrade\r
+        Sec-WebSocket-Key: \(key)\r
+        Sec-WebSocket-Version: 13\r
+        \r
+
+        """
+
+        let timeoutSeconds = requestTimeoutSeconds
+        let timeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(timeoutSeconds))
+            guard !Task.isCancelled else { return }
+            self?.failWebSocketHandshake(with: .timeout)
+        }
+        defer { timeoutTask.cancel() }
+
+        try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            webSocketHandshakeContinuation = continuation
+            lock.unlock()
+            stdin.write(Data(request.utf8))
+        }
+    }
+
+    private func failWebSocketHandshake(with error: CodexAppServerError) {
+        lock.lock()
+        let continuation = webSocketHandshakeContinuation
+        webSocketHandshakeContinuation = nil
+        lock.unlock()
+        continuation?.resume(throwing: error)
     }
 
     /// Atomically removes a pending request and resumes its
@@ -305,6 +392,15 @@ public final class CodexAppServerClient: @unchecked Sendable {
     static let maxLineByteCount = 8 * 1_024 * 1_024
 
     func handleIncomingData(_ data: Data) {
+        switch transport {
+        case .jsonLines:
+            handleJSONLines(data)
+        case .webSocket:
+            handleWebSocketData(data)
+        }
+    }
+
+    private func handleJSONLines(_ data: Data) {
         readBuffer.append(data)
 
         while let newlineIndex = readBuffer.firstIndex(of: UInt8(ascii: "\n")) {
@@ -317,15 +413,7 @@ public final class CodexAppServerClient: @unchecked Sendable {
             let consumeUpTo = readBuffer.index(after: newlineIndex)
             defer { readBuffer.removeSubrange(readBuffer.startIndex..<consumeUpTo) }
 
-            guard !lineData.isEmpty,
-                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
-            else { continue }
-
-            if let id = json["id"] as? Int {
-                handleResponse(id: id, json: json)
-            } else if let method = json["method"] as? String {
-                handleNotification(method: method, json: json)
-            }
+            handleJSONMessage(Data(lineData))
         }
 
         if readBuffer.count > Self.maxLineByteCount {
@@ -333,6 +421,81 @@ public final class CodexAppServerClient: @unchecked Sendable {
             // well-framed line still has a chance. The peer will likely
             // emit a protocol error which propagates as a normal `rpcError`.
             readBuffer.removeAll(keepingCapacity: false)
+        }
+    }
+
+    private func handleWebSocketData(_ data: Data) {
+        readBuffer.append(data)
+
+        if !webSocketUpgraded {
+            let delimiter = Data("\r\n\r\n".utf8)
+            guard let headerRange = readBuffer.range(of: delimiter) else {
+                if readBuffer.count > 16 * 1_024 {
+                    readBuffer.removeAll()
+                    failWebSocketHandshake(with: .invalidWebSocketHandshake)
+                }
+                return
+            }
+
+            let header = String(decoding: readBuffer[..<headerRange.upperBound], as: UTF8.self)
+            readBuffer.removeSubrange(readBuffer.startIndex..<headerRange.upperBound)
+            guard header.hasPrefix("HTTP/1.1 101") || header.hasPrefix("HTTP/1.0 101") else {
+                failWebSocketHandshake(with: .invalidWebSocketHandshake)
+                return
+            }
+
+            webSocketUpgraded = true
+            lock.lock()
+            let continuation = webSocketHandshakeContinuation
+            webSocketHandshakeContinuation = nil
+            lock.unlock()
+            continuation?.resume()
+        }
+
+        do {
+            for frame in try CodexWebSocketCodec.decodeFrames(from: &readBuffer) {
+                handleWebSocketFrame(frame)
+            }
+        } catch {
+            readBuffer.removeAll()
+        }
+    }
+
+    private func handleWebSocketFrame(_ frame: CodexWebSocketCodec.Frame) {
+        switch frame.opcode {
+        case 0x0:
+            guard fragmentedOpcode != nil else { return }
+            fragmentedPayload.append(frame.payload)
+            if frame.isFinal {
+                handleJSONMessage(fragmentedPayload)
+                fragmentedOpcode = nil
+                fragmentedPayload.removeAll(keepingCapacity: true)
+            }
+        case 0x1, 0x2:
+            if frame.isFinal {
+                handleJSONMessage(frame.payload)
+            } else {
+                fragmentedOpcode = frame.opcode
+                fragmentedPayload = frame.payload
+            }
+        case 0x8:
+            stop()
+        case 0x9:
+            stdin?.write(CodexWebSocketCodec.clientFrame(opcode: 0xA, payload: frame.payload))
+        default:
+            break
+        }
+    }
+
+    private func handleJSONMessage(_ message: Data) {
+        guard !message.isEmpty,
+              let json = try? JSONSerialization.jsonObject(with: message) as? [String: Any]
+        else { return }
+
+        if let id = json["id"] as? Int {
+            handleResponse(id: id, json: json)
+        } else if let method = json["method"] as? String {
+            handleNotification(method: method, json: json)
         }
     }
 
@@ -418,6 +581,7 @@ public enum CodexAppServerError: Error, LocalizedError {
     case disconnected
     case rpcError(String)
     case timeout
+    case invalidWebSocketHandshake
 
     public var errorDescription: String? {
         switch self {
@@ -425,6 +589,7 @@ public enum CodexAppServerError: Error, LocalizedError {
         case .disconnected: "Codex app-server connection was lost."
         case .rpcError(let msg): "Codex app-server error: \(msg)"
         case .timeout: "Codex app-server request timed out."
+        case .invalidWebSocketHandshake: "Codex app-server returned an invalid WebSocket handshake."
         }
     }
 }

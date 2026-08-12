@@ -8,6 +8,7 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
     public var lastAssistantMessage: String?
     public var currentTool: String?
     public var currentCommandPreview: String?
+    public var remoteHost: String?
 
     public init(
         transcriptPath: String? = nil,
@@ -15,7 +16,8 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
         lastUserPrompt: String? = nil,
         lastAssistantMessage: String? = nil,
         currentTool: String? = nil,
-        currentCommandPreview: String? = nil
+        currentCommandPreview: String? = nil,
+        remoteHost: String? = nil
     ) {
         self.transcriptPath = transcriptPath
         self.initialUserPrompt = initialUserPrompt
@@ -23,6 +25,7 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
         self.lastAssistantMessage = lastAssistantMessage
         self.currentTool = currentTool
         self.currentCommandPreview = currentCommandPreview
+        self.remoteHost = remoteHost
     }
 
     public var isEmpty: Bool {
@@ -32,6 +35,7 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
             && lastAssistantMessage == nil
             && currentTool == nil
             && currentCommandPreview == nil
+            && remoteHost == nil
     }
 }
 
@@ -99,6 +103,7 @@ public struct CodexTrackedSessionRecord: Equatable, Codable, Sendable {
         // restarted sessions continue to use app-level liveness rather than
         // falling back to CLI subprocess matching (which would kill them).
         session.isCodexAppSession = jumpTarget?.terminalApp == "Codex.app"
+        session.isRemote = codexMetadata?.remoteHost != nil
         return session
     }
 
