@@ -539,6 +539,9 @@ final class AppModel {
     @ObservationIgnored
     private var notificationPresentationTask: Task<Void, Never>?
 
+    @ObservationIgnored
+    private var approvalNotificationTasksBySessionID: [String: Task<Void, Never>] = [:]
+
     private static func appearanceDefaultsKey(_ profile: IslandAppearanceDisplayProfile, _ name: String) -> String {
         "appearance.island.v8.\(profile.rawValue).\(name)"
     }
@@ -590,7 +593,7 @@ final class AppModel {
         isNotificationSessionAlreadyFrontmost: @escaping @Sendable (AgentSession) async -> Bool = { session in
             await ForegroundTerminalSessionProbe().matches(session: session)
         },
-        approvalNotificationDelay: Duration = .seconds(2)
+        approvalNotificationDelay: Duration = .seconds(5)
     ) {
         self.terminalJumpAction = terminalJumpAction
         self.isNotificationSessionAlreadyFrontmost = isNotificationSessionAlreadyFrontmost
@@ -1517,6 +1520,14 @@ final class AppModel {
         }
 
         state.apply(event)
+        switch event {
+        case let .actionableStateResolved(payload):
+            approvalNotificationTasksBySessionID.removeValue(forKey: payload.sessionID)?.cancel()
+        case let .sessionCompleted(payload):
+            approvalNotificationTasksBySessionID.removeValue(forKey: payload.sessionID)?.cancel()
+        default:
+            break
+        }
         reconcileIslandSurfaceAfterStateChange()
         if ingress == .bridge {
             monitoring.markSessionAttached(for: event)
@@ -1585,16 +1596,20 @@ final class AppModel {
         }
 
         if delay > .zero {
-            notificationPresentationTask?.cancel()
-            notificationPresentationTask = Task { @MainActor [weak self] in
+            approvalNotificationTasksBySessionID[sessionID]?.cancel()
+            approvalNotificationTasksBySessionID[sessionID] = Task { @MainActor [weak self] in
                 do {
                     try await Task.sleep(for: delay)
                 } catch {
                     return
                 }
 
-                guard let self,
-                      self.notificationSurfaceIsEligibleForPresentation(surface, ingress: ingress) else {
+                guard let self else {
+                    return
+                }
+                defer { self.approvalNotificationTasksBySessionID.removeValue(forKey: sessionID) }
+
+                guard self.notificationSurfaceIsEligibleForPresentation(surface, ingress: ingress) else {
                     return
                 }
 

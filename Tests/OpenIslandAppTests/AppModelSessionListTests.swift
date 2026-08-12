@@ -730,6 +730,64 @@ struct AppModelSessionListTests {
     }
 
     @Test
+    func automaticallyResolvedApprovalDoesNotCancelAnotherSessionsPendingReminder() async throws {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let model = AppModel(
+            isNotificationSessionAlreadyFrontmost: { _ in false },
+            approvalNotificationDelay: .milliseconds(50)
+        )
+        model.suppressFrontmostNotifications = false
+        model.state = SessionState(
+            sessions: ["needs-user", "auto-approved"].map { id in
+                AgentSession(
+                    id: id,
+                    title: "Codex · \(id)",
+                    tool: .codex,
+                    origin: .live,
+                    attachmentState: .attached,
+                    phase: .running,
+                    summary: "Working.",
+                    updatedAt: now
+                )
+            }
+        )
+
+        for sessionID in ["needs-user", "auto-approved"] {
+            model.applyTrackedEvent(
+                .permissionRequested(
+                    PermissionRequested(
+                        sessionID: sessionID,
+                        request: PermissionRequest(
+                            title: "Run command",
+                            summary: "Codex requested approval.",
+                            affectedPath: "/tmp"
+                        ),
+                        timestamp: now.addingTimeInterval(1)
+                    )
+                ),
+                updateLastActionMessage: false,
+                ingress: .bridge
+            )
+        }
+
+        model.applyTrackedEvent(
+            .actionableStateResolved(
+                ActionableStateResolved(
+                    sessionID: "auto-approved",
+                    summary: "Approved automatically.",
+                    timestamp: now.addingTimeInterval(2)
+                )
+            ),
+            updateLastActionMessage: false,
+            ingress: .bridge
+        )
+
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(model.notchStatus == .opened)
+        #expect(model.islandSurface == .sessionList(actionableSessionID: "needs-user"))
+    }
+
+    @Test
     func hoverOpenedSessionListAutoCollapsesOnPointerExit() {
         let model = AppModel()
         model.notchStatus = .opened

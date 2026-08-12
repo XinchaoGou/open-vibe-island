@@ -22,8 +22,8 @@ Watch 通知让开发者第一时间感知到 agent 需要关注，并可以快�
 
 | 事件 | 推送？ | 理由 |
 |---|---|---|
-| `permissionRequested` | **是** | Agent 被阻塞，等人批准 |
-| `questionAsked` | **是** | Agent 被阻塞，等人回答 |
+| `permissionRequested` | **是（持续 5 秒未自动解决）** | 仅推送真正需要人批准的请求 |
+| `questionAsked` | 否 | 保留在 Mac session list，不主动打扰 |
 | `sessionCompleted` | **是** | 任务完成，值得知道 |
 | `sessionStarted` | 否 | 用户自己启动的，不需要通知 |
 | `activityUpdated` | 否 | 太频繁，无需关注 |
@@ -61,6 +61,8 @@ Watch 通知让开发者第一时间感知到 agent 需要关注，并可以快�
 5. 不操作 → 无影响，Mac 端仍在等待，用户可以回到电脑操作
 
 #### 2. 问题回答通知
+
+> 当前关键事件模式不主动推送 `questionAsked`；以下样式保留为未来可选能力的设计参考。
 
 ```
 ┌─────────────────────────┐

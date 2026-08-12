@@ -25,9 +25,15 @@ public final class WatchNotificationRelay: @unchecked Sendable {
     // Maps requestID → (sessionID, kind) for pending requests
     private let queue = DispatchQueue(label: "app.openisland.watch.relay")
     private var pendingRequests: [String: (sessionID: String, kind: PendingRequestKind)] = [:]
+    private var pendingPermissionTasks: [String: Task<Void, Never>] = [:]
+    private let permissionNotificationDelay: Duration
 
-    public init(endpoint: WatchHTTPEndpoint = WatchHTTPEndpoint()) {
+    public init(
+        endpoint: WatchHTTPEndpoint = WatchHTTPEndpoint(),
+        permissionNotificationDelay: Duration = .seconds(5)
+    ) {
         self.endpoint = endpoint
+        self.permissionNotificationDelay = permissionNotificationDelay
         setupResolutionHandler()
     }
 
@@ -39,36 +45,10 @@ public final class WatchNotificationRelay: @unchecked Sendable {
         switch event {
         case let .permissionRequested(payload):
             guard let session else { return }
-            let requestID = payload.request.id.uuidString
-            trackPendingRequest(requestID: requestID, sessionID: payload.sessionID, kind: .permission)
+            schedulePermissionNotification(payload, session: session)
 
-            let sseEvent = WatchSSEEvent.permissionRequested(WatchPermissionEvent(
-                sessionID: payload.sessionID,
-                agentTool: session.tool.displayName,
-                title: payload.request.title,
-                summary: payload.request.summary,
-                workingDirectory: session.jumpTarget?.workingDirectory,
-                primaryAction: payload.request.primaryActionTitle,
-                secondaryAction: payload.request.secondaryActionTitle,
-                requestID: requestID
-            ))
-            endpoint.pushEvent(sseEvent)
-            Self.logger.info("Pushed permissionRequested for session \(payload.sessionID)")
-
-        case let .questionAsked(payload):
-            guard let session else { return }
-            let requestID = payload.prompt.id.uuidString
-            trackPendingRequest(requestID: requestID, sessionID: payload.sessionID, kind: .question)
-
-            let sseEvent = WatchSSEEvent.questionAsked(WatchQuestionEvent(
-                sessionID: payload.sessionID,
-                agentTool: session.tool.displayName,
-                title: payload.prompt.title,
-                options: payload.prompt.options,
-                requestID: requestID
-            ))
-            endpoint.pushEvent(sseEvent)
-            Self.logger.info("Pushed questionAsked for session \(payload.sessionID)")
+        case .questionAsked:
+            break
 
         case let .sessionCompleted(payload):
             guard let session else { return }
@@ -81,6 +61,7 @@ public final class WatchNotificationRelay: @unchecked Sendable {
             Self.logger.info("Pushed sessionCompleted for session \(payload.sessionID)")
 
         case let .actionableStateResolved(payload):
+            cancelPendingPermissionNotification(forSession: payload.sessionID)
             // Find and remove ALL pending requests for this session, notifying
             // iPhone for each one. A single session can have multiple pending
             // entries when subagents fan out permission/question prompts in
@@ -113,6 +94,12 @@ public final class WatchNotificationRelay: @unchecked Sendable {
     }
 
     public func stop() {
+        let tasks = queue.sync {
+            let tasks = Array(pendingPermissionTasks.values)
+            pendingPermissionTasks.removeAll()
+            return tasks
+        }
+        tasks.forEach { $0.cancel() }
         endpoint.stop()
     }
 
@@ -121,6 +108,66 @@ public final class WatchNotificationRelay: @unchecked Sendable {
     private func trackPendingRequest(requestID: String, sessionID: String, kind: PendingRequestKind) {
         queue.sync {
             pendingRequests[requestID] = (sessionID: sessionID, kind: kind)
+        }
+    }
+
+    private func schedulePermissionNotification(
+        _ payload: PermissionRequested,
+        session: AgentSession
+    ) {
+        if permissionNotificationDelay == .zero {
+            publishPermissionNotification(payload, session: session)
+            return
+        }
+
+        let task = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(for: permissionNotificationDelay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            publishPermissionNotification(payload, session: session)
+            clearPendingPermissionTask(forSession: payload.sessionID)
+        }
+
+        let previous = queue.sync {
+            pendingPermissionTasks.updateValue(task, forKey: payload.sessionID)
+        }
+        previous?.cancel()
+    }
+
+    private func publishPermissionNotification(
+        _ payload: PermissionRequested,
+        session: AgentSession
+    ) {
+        let requestID = payload.request.id.uuidString
+        trackPendingRequest(requestID: requestID, sessionID: payload.sessionID, kind: .permission)
+
+        endpoint.pushEvent(.permissionRequested(WatchPermissionEvent(
+            sessionID: payload.sessionID,
+            agentTool: session.tool.displayName,
+            title: payload.request.title,
+            summary: payload.request.summary,
+            workingDirectory: session.jumpTarget?.workingDirectory,
+            primaryAction: payload.request.primaryActionTitle,
+            secondaryAction: payload.request.secondaryActionTitle,
+            requestID: requestID
+        )))
+        Self.logger.info("Pushed permissionRequested for session \(payload.sessionID)")
+    }
+
+    private func cancelPendingPermissionNotification(forSession sessionID: String) {
+        let task = queue.sync {
+            pendingPermissionTasks.removeValue(forKey: sessionID)
+        }
+        task?.cancel()
+    }
+
+    private func clearPendingPermissionTask(forSession sessionID: String) {
+        _ = queue.sync {
+            pendingPermissionTasks.removeValue(forKey: sessionID)
         }
     }
 
