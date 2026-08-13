@@ -608,7 +608,7 @@ final class AppModel {
         self.sessionVisibilityStore = sessionVisibilityStore
         hiddenIslandSessions = sessionVisibilityStore.load()
         UserDefaults.standard.register(defaults: [
-            Self.showDockIconDefaultsKey: true,
+            Self.showDockIconDefaultsKey: false,
             Self.hapticFeedbackEnabledDefaultsKey: false,
             Self.completionReplyEnabledDefaultsKey: false,
             Self.suppressFrontmostNotificationsDefaultsKey: true,
