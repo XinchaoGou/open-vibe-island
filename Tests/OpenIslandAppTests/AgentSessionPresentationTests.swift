@@ -5,6 +5,22 @@ import OpenIslandCore
 
 struct AgentSessionPresentationTests {
     @Test
+    func codexAgentBadgeUsesSSHVariantForRemoteSessions() {
+        var localSession = AgentSession(
+            id: "codex-local",
+            title: "Codex · worktree",
+            tool: .codex,
+            phase: .running,
+            summary: "Working",
+            updatedAt: .now
+        )
+        #expect(localSession.spotlightAgentBadgeTitle == "codex")
+
+        localSession.isRemote = true
+        #expect(localSession.spotlightAgentBadgeTitle == "codex-ssh")
+    }
+
+    @Test
     func codexAppHeadlineUsesCodexTaskNameInsteadOfInitialPrompt() {
         var session = AgentSession(
             id: "codex-thread",

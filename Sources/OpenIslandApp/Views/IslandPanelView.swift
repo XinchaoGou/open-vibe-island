@@ -1306,7 +1306,7 @@ private struct IslandSessionRow: View {
 
             HStack(spacing: 6) {
                 agentBadge
-                if session.isRemote {
+                if session.isRemote, session.tool != .codex {
                     sideBadge("SSH")
                 }
                 if let terminalBadge = session.spotlightTerminalBadge {
@@ -1416,7 +1416,7 @@ private struct IslandSessionRow: View {
 
     private var agentBadge: some View {
         let tint = Color(hex: session.tool.brandColorHex) ?? V6Palette.paper
-        return Text(agentBadgeTitle)
+        return Text(session.spotlightAgentBadgeTitle)
             .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
             .foregroundStyle(tint.opacity(notificationChromeOpacity))
             .padding(.horizontal, 8)
@@ -1474,21 +1474,6 @@ private struct IslandSessionRow: View {
         }
 
         return nil
-    }
-
-    private var agentBadgeTitle: String {
-        switch session.tool {
-        case .claudeCode:
-            "claude"
-        case .geminiCLI:
-            "gemini"
-        case .qwenCode:
-            "qwen"
-        case .kimiCLI:
-            "kimi"
-        default:
-            session.tool.shortName.lowercased()
-        }
     }
 
     private var rowLeadingInset: CGFloat {

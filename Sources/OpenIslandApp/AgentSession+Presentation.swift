@@ -117,6 +117,25 @@ extension AgentSession {
         return jumpTarget?.terminalApp
     }
 
+    var spotlightAgentBadgeTitle: String {
+        if tool == .codex, isRemote {
+            return "codex-ssh"
+        }
+
+        return switch tool {
+        case .claudeCode:
+            "claude"
+        case .geminiCLI:
+            "gemini"
+        case .qwenCode:
+            "qwen"
+        case .kimiCLI:
+            "kimi"
+        default:
+            tool.shortName.lowercased()
+        }
+    }
+
     var spotlightWorkspaceName: String {
         if let workspaceName = jumpTarget?.workspaceName.trimmedForSurface,
            !workspaceName.isEmpty {
