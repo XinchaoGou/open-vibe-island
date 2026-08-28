@@ -1637,6 +1637,7 @@ public final class CodexRolloutWatcher: @unchecked Sendable {
 
     private func syncLocked(targets: [CodexRolloutWatchTarget]) {
         let targetMap = Dictionary(uniqueKeysWithValues: targets.map { ($0.sessionID, $0) })
+        var targetsChanged = Set(observations.keys) != Set(targetMap.keys)
 
         observations = observations.reduce(into: [:]) { partialResult, pair in
             guard let updatedTarget = targetMap[pair.key] else {
@@ -1646,11 +1647,13 @@ public final class CodexRolloutWatcher: @unchecked Sendable {
             if pair.value.target == updatedTarget {
                 partialResult[pair.key] = pair.value
             } else {
+                targetsChanged = true
                 partialResult[pair.key] = makeObservation(for: updatedTarget)
             }
         }
 
         for target in targets where observations[target.sessionID] == nil {
+            targetsChanged = true
             observations[target.sessionID] = makeObservation(for: target)
         }
 
@@ -1670,7 +1673,12 @@ public final class CodexRolloutWatcher: @unchecked Sendable {
             timer.resume()
         }
 
-        pollLocked()
+        // The timer already polls unchanged observations. Avoid synchronously
+        // re-reading every tracked transcript when AppModel refreshes the
+        // target list after an unrelated bridge event.
+        if targetsChanged {
+            pollLocked()
+        }
     }
 
     private func pollLocked() {

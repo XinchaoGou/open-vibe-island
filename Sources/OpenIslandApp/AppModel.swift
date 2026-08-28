@@ -732,8 +732,11 @@ final class AppModel {
             }
         }
         monitoring.onCodexAppMaintenanceTick = { [weak self] in
-            self?.discovery.maintainCodexAppSessionsIfNeeded()
-            self?.codexAppServer.maintenanceTick()
+            guard let self else { return }
+            self.discovery.maintainCodexAppSessionsIfNeeded(
+                appServerConnected: self.codexAppServer.isConnected
+            )
+            self.codexAppServer.maintenanceTick()
         }
         refreshOverlayDisplayConfiguration()
         hasFinishedInit = true

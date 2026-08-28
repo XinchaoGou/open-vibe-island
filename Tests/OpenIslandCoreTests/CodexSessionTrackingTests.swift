@@ -925,6 +925,50 @@ struct CodexSessionTrackingTests {
     }
 
     @Test
+    func codexRolloutWatcherDoesNotRescanWhenTargetsAreUnchanged() async throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("open-island-rollout-no-rescan-\(UUID().uuidString)", isDirectory: true)
+        let rolloutURL = rootURL.appendingPathComponent("rollout.jsonl")
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        try Data().write(to: rolloutURL)
+
+        defer {
+            try? FileManager.default.removeItem(at: rootURL)
+        }
+
+        let recorder = EventRecorder()
+        let watcher = CodexRolloutWatcher(pollInterval: 1)
+        watcher.eventHandler = { event in
+            Task {
+                await recorder.append(event)
+            }
+        }
+        let target = CodexRolloutWatchTarget(
+            sessionID: "codex-session-no-rescan",
+            transcriptPath: rolloutURL.path
+        )
+        watcher.sync(targets: [target])
+
+        try appendRolloutLine(
+            rolloutLine(
+                timestamp: "2026-04-02T04:03:44.894Z",
+                type: "event_msg",
+                payload: [
+                    "type": "user_message",
+                    "message": "This should wait for the watcher timer.",
+                ]
+            ),
+            to: rolloutURL
+        )
+        watcher.sync(targets: [target])
+
+        try await Task.sleep(for: .milliseconds(100))
+        watcher.stop()
+
+        #expect(await recorder.snapshot().isEmpty)
+    }
+
+    @Test
     func codexRolloutWatcherBootstrapsPromptMetadataFromHeadWhenTailMissesIt() async throws {
         let rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("open-island-rollout-head-bootstrap-\(UUID().uuidString)", isDirectory: true)

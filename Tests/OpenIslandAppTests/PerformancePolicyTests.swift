@@ -73,6 +73,13 @@ struct PerformancePolicyTests {
         ))
     }
 
+    @MainActor
+    @Test
+    func codexRolloutRediscoveryIsFallbackOnlyWhenAppServerIsUnavailable() {
+        #expect(SessionDiscoveryCoordinator.shouldRediscoverCodexAppSessions(appServerConnected: false))
+        #expect(!SessionDiscoveryCoordinator.shouldRediscoverCodexAppSessions(appServerConnected: true))
+    }
+
     @Test
     func inactiveSessionDotDoesNotRequireAnimationTimeline() {
         #expect(IslandSessionStateIndicator.animatedDot.timelineInterval(
