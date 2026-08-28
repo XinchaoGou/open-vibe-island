@@ -9,8 +9,139 @@ import Testing
 /// the watch SSE stream stuck on stale "actionable" badges.
 struct WatchNotificationRelayTests {
     @Test
-    func resolvingActionableStateClearsAllPendingRequestsForSession() {
+    func approvalIsNotPublishedBeforeTheAttentionDelay() {
+        let relay = WatchNotificationRelay(permissionNotificationDelay: .seconds(1))
+        let session = AgentSession(
+            id: "auto-approved",
+            title: "Auto-approved",
+            tool: .codex,
+            phase: .running,
+            summary: "Working",
+            updatedAt: .now
+        )
+
+        relay.notifyEvent(
+            .permissionRequested(
+                PermissionRequested(
+                    sessionID: session.id,
+                    request: PermissionRequest(
+                        title: "Run command",
+                        summary: "Needs permission",
+                        affectedPath: "/tmp"
+                    ),
+                    timestamp: .now
+                )
+            ),
+            session: session
+        )
+
+        #expect(relay.pendingRequestCountForTests(sessionID: session.id) == 0)
+    }
+
+    @Test
+    func questionIsNotPublishedAsAWatchNotification() {
         let relay = WatchNotificationRelay()
+        let session = AgentSession(
+            id: "question",
+            title: "Question",
+            tool: .codex,
+            phase: .running,
+            summary: "Waiting",
+            updatedAt: .now
+        )
+
+        relay.notifyEvent(
+            .questionAsked(
+                QuestionAsked(
+                    sessionID: session.id,
+                    prompt: QuestionPrompt(title: "Which option?", options: ["A", "B"]),
+                    timestamp: .now
+                )
+            ),
+            session: session
+        )
+
+        #expect(relay.pendingRequestCountForTests(sessionID: session.id) == 0)
+    }
+
+    @Test
+    func completionCancelsDelayedApprovalNotification() async throws {
+        let relay = WatchNotificationRelay(permissionNotificationDelay: .milliseconds(50))
+        let session = AgentSession(
+            id: "completed-before-approval",
+            title: "Completed",
+            tool: .codex,
+            phase: .running,
+            summary: "Working",
+            updatedAt: .now
+        )
+
+        relay.notifyEvent(
+            .permissionRequested(
+                PermissionRequested(
+                    sessionID: session.id,
+                    request: PermissionRequest(
+                        title: "Run command",
+                        summary: "Needs permission",
+                        affectedPath: "/tmp"
+                    ),
+                    timestamp: .now
+                )
+            ),
+            session: session
+        )
+        relay.notifyEvent(
+            .sessionCompleted(
+                SessionCompleted(sessionID: session.id, summary: "Done", timestamp: .now)
+            ),
+            session: session
+        )
+
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(relay.pendingRequestCountForTests(sessionID: session.id) == 0)
+    }
+
+    @Test
+    func completionClearsPublishedApprovalNotification() {
+        let relay = WatchNotificationRelay(permissionNotificationDelay: .zero)
+        let session = AgentSession(
+            id: "completed-after-approval",
+            title: "Completed",
+            tool: .codex,
+            phase: .running,
+            summary: "Working",
+            updatedAt: .now
+        )
+
+        relay.notifyEvent(
+            .permissionRequested(
+                PermissionRequested(
+                    sessionID: session.id,
+                    request: PermissionRequest(
+                        title: "Run command",
+                        summary: "Needs permission",
+                        affectedPath: "/tmp"
+                    ),
+                    timestamp: .now
+                )
+            ),
+            session: session
+        )
+        #expect(relay.pendingRequestCountForTests(sessionID: session.id) == 1)
+
+        relay.notifyEvent(
+            .sessionCompleted(
+                SessionCompleted(sessionID: session.id, summary: "Done", timestamp: .now)
+            ),
+            session: session
+        )
+
+        #expect(relay.pendingRequestCountForTests(sessionID: session.id) == 0)
+    }
+
+    @Test
+    func resolvingActionableStateClearsAllPendingRequestsForSession() {
+        let relay = WatchNotificationRelay(permissionNotificationDelay: .zero)
         let session = AgentSession(
             id: "session-multi",
             title: "Multi-pending session",
@@ -71,7 +202,7 @@ struct WatchNotificationRelayTests {
 
     @Test
     func resolvingOneSessionLeavesOtherSessionsUntouched() {
-        let relay = WatchNotificationRelay()
+        let relay = WatchNotificationRelay(permissionNotificationDelay: .zero)
         let sessionA = AgentSession(
             id: "session-A",
             title: "A",

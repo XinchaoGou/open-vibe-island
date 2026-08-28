@@ -111,7 +111,29 @@ extension AgentSession {
     }
 
     var spotlightTerminalBadge: String? {
-        jumpTarget?.terminalApp
+        if isCodexAppSession {
+            return nil
+        }
+        return jumpTarget?.terminalApp
+    }
+
+    var spotlightAgentBadgeTitle: String {
+        if tool == .codex, isRemote {
+            return "codex-ssh"
+        }
+
+        return switch tool {
+        case .claudeCode:
+            "claude"
+        case .geminiCLI:
+            "gemini"
+        case .qwenCode:
+            "qwen"
+        case .kimiCLI:
+            "kimi"
+        default:
+            tool.shortName.lowercased()
+        }
     }
 
     var spotlightWorkspaceName: String {
@@ -168,6 +190,13 @@ extension AgentSession {
     }
 
     var spotlightHeadlineText: String {
+        if isCodexAppSession, isGeneratedCodexWorkspace {
+            let taskName = title.trimmedForSurface
+            if !taskName.isEmpty, taskName != "Codex" {
+                return taskName
+            }
+        }
+
         var headline = spotlightWorkspaceName
 
         if let branch = spotlightWorktreeBranch {
@@ -181,10 +210,42 @@ extension AgentSession {
         return "\(headline) · \(prompt)"
     }
 
+    private var isGeneratedCodexWorkspace: Bool {
+        guard let workingDirectory = jumpTarget?.workingDirectory else {
+            return false
+        }
+
+        let components = URL(fileURLWithPath: workingDirectory).standardized.pathComponents
+        guard components.count >= 4 else {
+            return false
+        }
+
+        let tail = components.suffix(4)
+        guard tail[tail.startIndex] == "Documents",
+              tail[tail.index(after: tail.startIndex)] == "Codex" else {
+            return false
+        }
+
+        let dateIndex = tail.index(tail.startIndex, offsetBy: 2)
+        let dateParts = tail[dateIndex].split(separator: "-", omittingEmptySubsequences: false)
+        return dateParts.map(\.count) == [4, 2, 2]
+            && dateParts.allSatisfy { $0.allSatisfy(\.isNumber) }
+    }
+
     var spotlightHeadlinePromptText: String? {
-        // Headline shows the initial prompt (session topic), not the latest.
-        // The latest prompt is shown separately in the "You:" line.
-        initialPromptText ?? latestPromptText
+        // Codex Desktop already generates a concise task name. Prefer that
+        // identity over replaying the first (often injected) prompt.
+        if isCodexAppSession {
+            let taskName = title.trimmedForSurface
+            let generatedFallback = "Codex · \(spotlightWorkspaceName)"
+            if !taskName.isEmpty, taskName != generatedFallback, taskName != "Codex" {
+                return taskName
+            }
+        }
+
+        // Other surfaces use the initial prompt as the session topic. The
+        // latest prompt is shown separately in the "You:" line.
+        return initialPromptText ?? latestPromptText
     }
 
     var spotlightPromptText: String? {

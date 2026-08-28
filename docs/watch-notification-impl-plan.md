@@ -88,8 +88,8 @@
 - 监听 `AppModel.state` 变化（通过 `applyTrackedEvent()` 回调）
 - 过滤需要推送的事件：
   - `sessionCompleted` → 推送完成通知
-  - `permissionRequested` → 推送权限请求（含 requestID）
-  - `questionAsked` → 推送问题（含选项）
+  - `permissionRequested` → 持续 5 秒未自动解决后推送权限请求（含 requestID）
+  - `questionAsked` → 不主动推送，仅保留在 Mac session list
 - 收到 `/resolution` POST → 根据 requestID 找到对应 session → 调用 BridgeServer 的 resolution 逻辑
 
 ### 修改文件

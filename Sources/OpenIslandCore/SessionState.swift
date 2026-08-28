@@ -443,6 +443,66 @@ public struct SessionState: Equatable, Sendable {
         return sessionsByID.count != before
     }
 
+    /// Reconciles Codex Desktop rows against the authoritative task list.
+    /// Rollout discovery still supplies live phase/detail updates, while this
+    /// snapshot owns task identity (including Codex-generated names) and
+    /// excludes internal helper threads that never appear in `thread/list`.
+    @discardableResult
+    public mutating func reconcileCodexAppThreadSnapshot(
+        _ threads: [CodexThread],
+        remoteHost: String? = nil
+    ) -> Bool {
+        let before = sessionsByID
+        let threadIDs = Set(threads.map(\.id))
+
+        sessionsByID = sessionsByID.filter { _, session in
+            guard session.isCodexAppSession else { return true }
+            guard session.codexMetadata?.remoteHost == remoteHost else { return true }
+            return threadIDs.contains(session.id)
+        }
+
+        for thread in threads {
+            guard var session = sessionsByID[thread.id], session.isCodexAppSession else {
+                continue
+            }
+
+            if let name = thread.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+                session.title = name
+            }
+
+            let workspaceName = URL(fileURLWithPath: thread.cwd).lastPathComponent
+            var jumpTarget = session.jumpTarget ?? JumpTarget(
+                terminalApp: "Codex.app",
+                workspaceName: workspaceName,
+                paneTitle: session.title,
+                workingDirectory: thread.cwd,
+                codexThreadID: thread.id
+            )
+            jumpTarget.terminalApp = "Codex.app"
+            jumpTarget.workspaceName = workspaceName
+            jumpTarget.paneTitle = session.title
+            jumpTarget.workingDirectory = thread.cwd
+            jumpTarget.codexThreadID = thread.id
+            jumpTarget.codexRemoteHost = remoteHost
+            session.jumpTarget = jumpTarget
+
+            var metadata = session.codexMetadata ?? CodexSessionMetadata()
+            metadata.transcriptPath = thread.path ?? metadata.transcriptPath
+            metadata.remoteHost = remoteHost
+            if !thread.preview.isEmpty {
+                metadata.initialUserPrompt = thread.preview
+            }
+            session.codexMetadata = metadata.isEmpty ? nil : metadata
+            session.isCodexAppSession = true
+            session.isRemote = remoteHost != nil
+            session.isProcessAlive = true
+            session.isSessionEnded = false
+            sessionsByID[thread.id] = session
+        }
+
+        return sessionsByID != before
+    }
+
     private mutating func upsert(_ session: AgentSession) {
         sessionsByID[session.id] = session
     }

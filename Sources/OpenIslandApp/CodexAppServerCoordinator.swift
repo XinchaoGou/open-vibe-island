@@ -17,6 +17,33 @@ final class CodexAppServerCoordinator {
     @ObservationIgnored
     private var connectTask: Task<Void, Never>?
 
+    @ObservationIgnored
+    private var remoteClients: [String: CodexAppServerClient] = [:]
+
+    @ObservationIgnored
+    private var remoteConnectTasks: [String: Task<Void, Never>] = [:]
+
+    @ObservationIgnored
+    private var remoteConnections: [String: CodexRemoteHostDiscovery.Connection] = [:]
+
+    @ObservationIgnored
+    private var remoteHostPresence = CodexRemoteHostPresence()
+
+    @ObservationIgnored
+    private let remoteHostDiscovery = CodexRemoteHostDiscovery()
+
+    @ObservationIgnored
+    private var lastRateLimitsRefreshAt = Date.distantPast
+
+    @ObservationIgnored
+    private var lastThreadSnapshotAt = Date.distantPast
+
+    @ObservationIgnored
+    private var lastRemoteHostDiscoveryAt = Date.distantPast
+
+    private static let rateLimitsRefreshInterval: TimeInterval = 60
+    private static let threadSnapshotInterval: TimeInterval = 10
+
     /// Callback to emit AgentEvents into AppModel.
     @ObservationIgnored
     var onEvent: ((AgentEvent) -> Void)?
@@ -24,6 +51,14 @@ final class CodexAppServerCoordinator {
     /// Callback to log status messages.
     @ObservationIgnored
     var onStatusMessage: ((String) -> Void)?
+
+    /// Publishes authoritative account usage read directly from Codex.
+    @ObservationIgnored
+    var onUsageSnapshot: ((CodexUsageSnapshot) -> Void)?
+
+    /// Publishes Codex's authoritative task identity snapshot.
+    @ObservationIgnored
+    var onThreadSnapshot: (([CodexThread], String?) -> Void)?
 
     /// Returns `true` if a session with the given id is already tracked.
     /// Used to avoid re-emitting `sessionStarted` (which rebuilds the
@@ -61,7 +96,7 @@ final class CodexAppServerCoordinator {
                 let newClient = CodexAppServerClient(codexPath: codexPath)
                 newClient.onNotification = { [weak self] notification in
                     Task { @MainActor [weak self] in
-                        self?.handleNotification(notification)
+                        self?.handleNotification(notification, remoteHost: nil)
                     }
                 }
                 try await newClient.start()
@@ -72,8 +107,10 @@ final class CodexAppServerCoordinator {
 
                 self.onStatusMessage?("Connected to Codex app-server.")
 
-                // Fetch currently loaded threads and create sessions.
-                await self.syncLoadedThreads()
+                // This app-server process has no loaded-thread state of its
+                // own. Sync recent account threads and live account usage.
+                await self.syncRecentThreads(client: newClient, remoteHost: nil)
+                await self.refreshAccountRateLimits()
             } catch {
                 self.connectTask = nil
                 self.onStatusMessage?("Failed to connect to Codex app-server: \(error.localizedDescription)")
@@ -87,40 +124,170 @@ final class CodexAppServerCoordinator {
         connectTask = nil
         client?.stop()
         client = nil
+        for task in remoteConnectTasks.values { task.cancel() }
+        remoteConnectTasks.removeAll()
+        for client in remoteClients.values { client.stop() }
+        remoteClients.removeAll()
+        remoteConnections.removeAll()
+        remoteHostPresence.reset()
         isConnected = false
+        lastRateLimitsRefreshAt = .distantPast
+        lastThreadSnapshotAt = .distantPast
+        lastRemoteHostDiscoveryAt = .distantPast
+    }
+
+    /// Refresh account usage while connected, throttled for the monitor's
+    /// frequent maintenance cadence.
+    func maintenanceTick(now: Date = .now) {
+        if now.timeIntervalSince(lastRemoteHostDiscoveryAt) >= Self.threadSnapshotInterval {
+            lastRemoteHostDiscoveryAt = now
+            let discovery = remoteHostDiscovery
+            Task.detached(priority: .utility) { [weak self] in
+                guard let connections = discovery.discover() else { return }
+                await self?.synchronizeRemoteHosts(connections)
+            }
+        }
+
+        guard isConnected else { return }
+
+        if now.timeIntervalSince(lastThreadSnapshotAt) >= Self.threadSnapshotInterval {
+            lastThreadSnapshotAt = now
+            Task { [weak self] in
+                guard let self, let client = self.client else { return }
+                await self.syncRecentThreads(client: client, remoteHost: nil)
+                for (host, remoteClient) in self.remoteClients {
+                    await self.syncRecentThreads(client: remoteClient, remoteHost: host)
+                }
+            }
+        }
+
+        if now.timeIntervalSince(lastRateLimitsRefreshAt) >= Self.rateLimitsRefreshInterval {
+            lastRateLimitsRefreshAt = now
+            Task { [weak self] in
+                await self?.refreshAccountRateLimits()
+            }
+        }
     }
 
     // MARK: - Thread sync
 
-    private func syncLoadedThreads() async {
-        guard let client else { return }
+    private func syncRecentThreads(client: CodexAppServerClient, remoteHost: String?) async {
+        lastThreadSnapshotAt = .now
         do {
-            let threads = try await client.listLoadedThreads()
+            let threads = try await client.listThreads(limit: 40)
+            let cutoff = Int(Date.now.addingTimeInterval(-86_400).timeIntervalSince1970)
+            let recentThreads = threads.filter { !$0.ephemeral && $0.updatedAt >= cutoff }
             var created = 0
-            for thread in threads where !thread.ephemeral {
+            for thread in recentThreads {
                 // Skip threads already tracked — re-emitting sessionStarted
                 // rebuilds the AgentSession and would wipe richer state
                 // already accumulated from hooks or rediscovery.
                 if isSessionTracked?(thread.id) == true { continue }
-                emitSessionStarted(from: thread)
+                emitSessionStarted(from: thread, remoteHost: remoteHost)
                 created += 1
             }
+            onThreadSnapshot?(recentThreads, remoteHost)
             if created > 0 {
-                onStatusMessage?("Synced \(created) new Codex thread(s) from app-server.")
+                let source = remoteHost.map { " SSH host \($0)" } ?? " app-server"
+                onStatusMessage?("Synced \(created) recent Codex thread(s) from\(source).")
             }
         } catch {
-            onStatusMessage?("Failed to list loaded Codex threads: \(error.localizedDescription)")
+            let source = remoteHost.map { " on \($0)" } ?? ""
+            onStatusMessage?("Failed to list recent Codex threads\(source): \(error.localizedDescription)")
+        }
+    }
+
+    private func synchronizeRemoteHosts(_ connections: [CodexRemoteHostDiscovery.Connection]) {
+        let discoveredByHost = Dictionary(uniqueKeysWithValues: connections.map { ($0.host, $0) })
+        let discoveredHosts = Set(discoveredByHost.keys)
+
+        for (host, client) in Array(remoteClients) where !client.isRunning {
+            remoteClients[host] = nil
+            client.stop()
+        }
+
+        for (host, connection) in discoveredByHost
+        where remoteConnections[host] != nil && remoteConnections[host] != connection {
+            remoteClients.removeValue(forKey: host)?.stop()
+            remoteConnectTasks.removeValue(forKey: host)?.cancel()
+            remoteConnections[host] = nil
+        }
+
+        let trackedHosts = Set(remoteConnections.keys)
+        let disconnectedHosts = remoteHostPresence.hostsToDisconnect(
+            currentHosts: trackedHosts,
+            discoveredHosts: discoveredHosts
+        )
+        for host in disconnectedHosts {
+            remoteClients.removeValue(forKey: host)?.stop()
+            remoteConnectTasks.removeValue(forKey: host)?.cancel()
+            remoteConnections[host] = nil
+            onThreadSnapshot?([], host)
+        }
+
+        for connection in connections
+        where remoteClients[connection.host] == nil && remoteConnectTasks[connection.host] == nil {
+            remoteConnections[connection.host] = connection
+            connectRemoteHost(connection)
+        }
+    }
+
+    private func connectRemoteHost(_ connection: CodexRemoteHostDiscovery.Connection) {
+        let host = connection.host
+        let task = Task { [weak self] in
+            guard let self else { return }
+            let remoteClient = CodexAppServerClient(
+                executablePath: "/usr/bin/ssh",
+                arguments: connection.sshOptions + [host, connection.remoteCommand],
+                transport: .webSocket
+            )
+            remoteClient.onNotification = { [weak self] notification in
+                Task { @MainActor [weak self] in
+                    self?.handleNotification(notification, remoteHost: host)
+                }
+            }
+
+            do {
+                try await remoteClient.start()
+                guard !Task.isCancelled else {
+                    remoteClient.stop()
+                    return
+                }
+                self.remoteClients[host] = remoteClient
+                self.remoteConnectTasks[host] = nil
+                self.onStatusMessage?("Connected to Codex SSH host \(host).")
+                await self.syncRecentThreads(client: remoteClient, remoteHost: host)
+            } catch {
+                remoteClient.stop()
+                self.remoteConnectTasks[host] = nil
+                self.onStatusMessage?("Failed to connect to Codex SSH host \(host): \(error.localizedDescription)")
+            }
+        }
+        remoteConnectTasks[host] = task
+    }
+
+    private func refreshAccountRateLimits() async {
+        guard let client else { return }
+        lastRateLimitsRefreshAt = .now
+        do {
+            let rateLimits = try await client.readAccountRateLimits()
+            onUsageSnapshot?(CodexUsageSnapshot(rateLimits: rateLimits))
+        } catch {
+            onStatusMessage?("Failed to read Codex rate limits: \(error.localizedDescription)")
         }
     }
 
     // MARK: - Notification handling
 
-    private func handleNotification(_ notification: CodexAppServerNotification) {
+    private func handleNotification(
+        _ notification: CodexAppServerNotification,
+        remoteHost: String?
+    ) {
         switch notification {
         case .threadStarted(let thread):
             guard !thread.ephemeral else { return }
             guard isSessionTracked?(thread.id) != true else { return }
-            emitSessionStarted(from: thread)
+            emitSessionStarted(from: thread, remoteHost: remoteHost)
 
         case .threadStatusChanged(let threadId, let status):
             switch status.type {
@@ -233,6 +400,11 @@ final class CodexAppServerCoordinator {
                 )
             ))
 
+        case .accountRateLimitsUpdated:
+            Task { [weak self] in
+                await self?.refreshAccountRateLimits()
+            }
+
         case .unknown:
             break
         }
@@ -240,10 +412,21 @@ final class CodexAppServerCoordinator {
 
     // MARK: - Helpers
 
-    private func emitSessionStarted(from thread: CodexThread) {
+    private func emitSessionStarted(from thread: CodexThread, remoteHost: String?) {
+        onEvent?(.sessionStarted(Self.sessionStarted(from: thread, remoteHost: remoteHost)))
+    }
+
+    static func sessionStarted(
+        from thread: CodexThread,
+        remoteHost: String?,
+        observedAt: Date = .now
+    ) -> SessionStarted {
         let workspaceName = URL(fileURLWithPath: thread.cwd).lastPathComponent
         let title = thread.name ?? workspaceName
         let summary = thread.preview.isEmpty ? "Codex session." : String(thread.preview.prefix(120))
+        let updatedAt = thread.updatedAt > 0
+            ? Date(timeIntervalSince1970: TimeInterval(thread.updatedAt))
+            : observedAt
 
         let phase: SessionPhase
         switch thread.status.type {
@@ -252,27 +435,28 @@ final class CodexAppServerCoordinator {
         case .notLoaded, .systemError: phase = .completed
         }
 
-        onEvent?(.sessionStarted(
-            SessionStarted(
-                sessionID: thread.id,
-                title: title,
-                tool: .codex,
-                origin: .live,
-                initialPhase: phase,
-                summary: summary,
-                timestamp: .now,
-                jumpTarget: JumpTarget(
-                    terminalApp: "Codex.app",
-                    workspaceName: workspaceName,
-                    paneTitle: title,
-                    workingDirectory: thread.cwd,
-                    codexThreadID: thread.id
-                ),
-                codexMetadata: CodexSessionMetadata(
-                    transcriptPath: thread.path,
-                    initialUserPrompt: thread.preview.isEmpty ? nil : thread.preview
-                )
-            )
-        ))
+        return SessionStarted(
+            sessionID: thread.id,
+            title: title,
+            tool: .codex,
+            origin: .live,
+            initialPhase: phase,
+            summary: summary,
+            timestamp: updatedAt,
+            jumpTarget: JumpTarget(
+                terminalApp: "Codex.app",
+                workspaceName: workspaceName,
+                paneTitle: title,
+                workingDirectory: thread.cwd,
+                codexThreadID: thread.id,
+                codexRemoteHost: remoteHost
+            ),
+            codexMetadata: CodexSessionMetadata(
+                transcriptPath: thread.path,
+                initialUserPrompt: thread.preview.isEmpty ? nil : thread.preview,
+                remoteHost: remoteHost
+            ),
+            isRemote: remoteHost != nil
+        )
     }
 }

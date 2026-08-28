@@ -22,7 +22,7 @@ struct IslandSurfaceTests {
     }
 
     @Test
-    func questionEventsRouteToActionableSurface() {
+    func questionEventsDoNotInterruptTheUser() {
         let event = AgentEvent.questionAsked(
             QuestionAsked(
                 sessionID: "session-2",
@@ -34,7 +34,21 @@ struct IslandSurfaceTests {
             )
         )
 
-        #expect(IslandSurface.notificationSurface(for: event) == .sessionList(actionableSessionID: "session-2"))
+        #expect(IslandSurface.notificationSurface(for: event) == nil)
+    }
+
+    @Test
+    func activityUpdatesDoNotInterruptTheUser() {
+        let event = AgentEvent.activityUpdated(
+            SessionActivityUpdated(
+                sessionID: "session-2",
+                summary: "Thinking",
+                phase: .running,
+                timestamp: .now
+            )
+        )
+
+        #expect(IslandSurface.notificationSurface(for: event) == nil)
     }
 
     @Test

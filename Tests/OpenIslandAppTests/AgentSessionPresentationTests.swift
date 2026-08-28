@@ -5,6 +5,75 @@ import OpenIslandCore
 
 struct AgentSessionPresentationTests {
     @Test
+    func codexAgentBadgeUsesSSHVariantForRemoteSessions() {
+        var localSession = AgentSession(
+            id: "codex-local",
+            title: "Codex · worktree",
+            tool: .codex,
+            phase: .running,
+            summary: "Working",
+            updatedAt: .now
+        )
+        #expect(localSession.spotlightAgentBadgeTitle == "codex")
+
+        localSession.isRemote = true
+        #expect(localSession.spotlightAgentBadgeTitle == "codex-ssh")
+    }
+
+    @Test
+    func codexAppHeadlineUsesCodexTaskNameInsteadOfInitialPrompt() {
+        var session = AgentSession(
+            id: "codex-thread",
+            title: "设计长期迭代管理系统",
+            tool: .codex,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .completed,
+            summary: "Done",
+            updatedAt: .now,
+            jumpTarget: JumpTarget(
+                terminalApp: "Codex.app",
+                workspaceName: "RecogNet",
+                paneTitle: "设计长期迭代管理系统",
+                workingDirectory: "/tmp/RecogNet",
+                codexThreadID: "codex-thread"
+            ),
+            codexMetadata: CodexSessionMetadata(
+                initialUserPrompt: "帮我看看，我怎么更好管理这个迭代"
+            )
+        )
+        session.isCodexAppSession = true
+        session.isProcessAlive = true
+
+        #expect(session.spotlightHeadlineText == "RecogNet · 设计长期迭代管理系统")
+        #expect(session.spotlightTerminalBadge == nil)
+    }
+
+    @Test
+    func codexAppHeadlineHidesGeneratedWorkspaceForNonProjectTask() {
+        var session = AgentSession(
+            id: "codex-thread",
+            title: "Add cy1 user",
+            tool: .codex,
+            origin: .live,
+            attachmentState: .stale,
+            phase: .completed,
+            summary: "Done",
+            updatedAt: .now,
+            jumpTarget: JumpTarget(
+                terminalApp: "Codex.app",
+                workspaceName: "c-y",
+                paneTitle: "Add cy1 user",
+                workingDirectory: "/Users/test/Documents/Codex/2026-07-27/c-y",
+                codexThreadID: "codex-thread"
+            )
+        )
+        session.isCodexAppSession = true
+
+        #expect(session.spotlightHeadlineText == "Add cy1 user")
+    }
+
+    @Test
     func attachedCompletedSessionStaysActiveWhileRecent() {
         let referenceDate = Date(timeIntervalSince1970: 10_000)
         let session = AgentSession(

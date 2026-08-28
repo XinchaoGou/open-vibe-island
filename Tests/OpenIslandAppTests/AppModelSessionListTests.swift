@@ -31,6 +31,113 @@ struct AppModelSessionListTests {
     }
 
     @Test
+    func hidingCompletedSessionRemovesItFromIslandAndPersists() throws {
+        let suiteName = "AppModelSessionListTests.hidden.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = IslandSessionVisibilityStore(defaults: defaults)
+        var session = AgentSession(
+            id: "old-codex-session",
+            title: "Add cy1 user",
+            tool: .codex,
+            origin: .live,
+            attachmentState: .stale,
+            phase: .completed,
+            summary: "Done",
+            updatedAt: .now
+        )
+        session.isCodexAppSession = true
+        session.isProcessAlive = true
+
+        let model = AppModel(sessionVisibilityStore: store)
+        model.state = SessionState(sessions: [session])
+        #expect(model.islandListSessions.map(\.id) == [session.id])
+
+        model.hideSessionFromIsland(session.id)
+        #expect(model.islandListSessions.isEmpty)
+
+        let relaunchedModel = AppModel(sessionVisibilityStore: store)
+        relaunchedModel.state = SessionState(sessions: [session])
+        #expect(relaunchedModel.islandListSessions.isEmpty)
+        #expect(relaunchedModel.hiddenIslandSessions.map(\.title) == ["Add cy1 user"])
+
+        relaunchedModel.restoreSessionToIsland(session.id)
+        #expect(relaunchedModel.islandListSessions.map(\.id) == [session.id])
+        #expect(relaunchedModel.hiddenIslandSessions.isEmpty)
+    }
+
+    @Test
+    func hiddenCompletedSessionReturnsWhenItNeedsAttention() throws {
+        let suiteName = "AppModelSessionListTests.hiddenAttention.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = AppModel(sessionVisibilityStore: IslandSessionVisibilityStore(defaults: defaults))
+        var session = AgentSession(
+            id: "resumed-codex-session",
+            title: "Old task",
+            tool: .codex,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .completed,
+            summary: "Done",
+            updatedAt: .now
+        )
+        session.isCodexAppSession = true
+        session.isProcessAlive = true
+        model.state = SessionState(sessions: [session])
+        model.hideSessionFromIsland(session.id)
+        #expect(model.islandListSessions.isEmpty)
+
+        model.applyTrackedEvent(
+            .permissionRequested(
+                PermissionRequested(
+                    sessionID: session.id,
+                    request: PermissionRequest(
+                        title: "Approval Required",
+                        summary: "Needs approval",
+                        affectedPath: ""
+                    ),
+                    timestamp: .now
+                )
+            ),
+            updateLastActionMessage: false
+        )
+
+        #expect(model.islandListSessions.map(\.id) == [session.id])
+        #expect(model.hiddenIslandSessions.isEmpty)
+    }
+
+    @Test
+    func hiddenSessionStaysHiddenWhenStartupSyncTemporarilyMarksItRunning() throws {
+        let suiteName = "AppModelSessionListTests.hiddenStartup.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = IslandSessionVisibilityStore(defaults: defaults)
+        var session = AgentSession(
+            id: "offline-resumed-session",
+            title: "Old task",
+            tool: .codex,
+            origin: .live,
+            attachmentState: .attached,
+            phase: .completed,
+            summary: "Done",
+            updatedAt: .now
+        )
+        session.isCodexAppSession = true
+        session.isProcessAlive = true
+        let firstModel = AppModel(sessionVisibilityStore: store)
+        firstModel.state = SessionState(sessions: [session])
+        firstModel.hideSessionFromIsland(session.id)
+
+        session.phase = .running
+        let relaunchedModel = AppModel(sessionVisibilityStore: store)
+        relaunchedModel.state = SessionState(sessions: [session])
+
+        #expect(relaunchedModel.islandListSessions.isEmpty)
+        #expect(relaunchedModel.hiddenIslandSessions.map(\.id) == [session.id])
+    }
+
+    @Test
     func islandListSessionsOnlyIncludeLiveAttachedSessions() {
         let now = Date(timeIntervalSince1970: 2_000)
         let model = AppModel()
@@ -570,7 +677,8 @@ struct AppModelSessionListTests {
         let model = AppModel(
             isNotificationSessionAlreadyFrontmost: { session in
                 session.id == "frontmost-session"
-            }
+            },
+            approvalNotificationDelay: .milliseconds(20)
         )
         model.notchStatus = .closed
         model.notchOpenReason = nil
@@ -619,7 +727,8 @@ struct AppModelSessionListTests {
     func bridgeNotificationStillPresentsWhenSessionIsNotFrontmost() async throws {
         let now = Date(timeIntervalSince1970: 2_000)
         let model = AppModel(
-            isNotificationSessionAlreadyFrontmost: { _ in false }
+            isNotificationSessionAlreadyFrontmost: { _ in false },
+            approvalNotificationDelay: .milliseconds(20)
         )
         model.notchStatus = .closed
         model.notchOpenReason = nil
@@ -665,6 +774,124 @@ struct AppModelSessionListTests {
         #expect(model.notchStatus == .opened)
         #expect(model.notchOpenReason == .notification)
         #expect(model.islandSurface == .sessionList(actionableSessionID: "background-session"))
+    }
+
+    @Test
+    func approvalResolvedAutomaticallyDoesNotInterruptTheUser() async throws {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let model = AppModel(
+            isNotificationSessionAlreadyFrontmost: { _ in false },
+            approvalNotificationDelay: .milliseconds(50)
+        )
+        model.suppressFrontmostNotifications = false
+        model.notchStatus = .closed
+        model.notchOpenReason = nil
+        model.state = SessionState(
+            sessions: [
+                AgentSession(
+                    id: "auto-approved-session",
+                    title: "Codex · open-island",
+                    tool: .codex,
+                    origin: .live,
+                    attachmentState: .attached,
+                    phase: .running,
+                    summary: "Working.",
+                    updatedAt: now
+                ),
+            ]
+        )
+
+        model.applyTrackedEvent(
+            .permissionRequested(
+                PermissionRequested(
+                    sessionID: "auto-approved-session",
+                    request: PermissionRequest(
+                        title: "Run command",
+                        summary: "Codex requested approval.",
+                        affectedPath: "/tmp"
+                    ),
+                    timestamp: now.addingTimeInterval(1)
+                )
+            ),
+            updateLastActionMessage: false,
+            ingress: .bridge
+        )
+
+        #expect(model.notchStatus == .closed)
+
+        model.applyTrackedEvent(
+            .actionableStateResolved(
+                ActionableStateResolved(
+                    sessionID: "auto-approved-session",
+                    summary: "Approved automatically.",
+                    timestamp: now.addingTimeInterval(2)
+                )
+            ),
+            updateLastActionMessage: false,
+            ingress: .bridge
+        )
+
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(model.notchStatus == .closed)
+        #expect(model.notchOpenReason == nil)
+    }
+
+    @Test
+    func automaticallyResolvedApprovalDoesNotCancelAnotherSessionsPendingReminder() async throws {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let model = AppModel(
+            isNotificationSessionAlreadyFrontmost: { _ in false },
+            approvalNotificationDelay: .milliseconds(50)
+        )
+        model.suppressFrontmostNotifications = false
+        model.state = SessionState(
+            sessions: ["needs-user", "auto-approved"].map { id in
+                AgentSession(
+                    id: id,
+                    title: "Codex · \(id)",
+                    tool: .codex,
+                    origin: .live,
+                    attachmentState: .attached,
+                    phase: .running,
+                    summary: "Working.",
+                    updatedAt: now
+                )
+            }
+        )
+
+        for sessionID in ["needs-user", "auto-approved"] {
+            model.applyTrackedEvent(
+                .permissionRequested(
+                    PermissionRequested(
+                        sessionID: sessionID,
+                        request: PermissionRequest(
+                            title: "Run command",
+                            summary: "Codex requested approval.",
+                            affectedPath: "/tmp"
+                        ),
+                        timestamp: now.addingTimeInterval(1)
+                    )
+                ),
+                updateLastActionMessage: false,
+                ingress: .bridge
+            )
+        }
+
+        model.applyTrackedEvent(
+            .actionableStateResolved(
+                ActionableStateResolved(
+                    sessionID: "auto-approved",
+                    summary: "Approved automatically.",
+                    timestamp: now.addingTimeInterval(2)
+                )
+            ),
+            updateLastActionMessage: false,
+            ingress: .bridge
+        )
+
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(model.notchStatus == .opened)
+        #expect(model.islandSurface == .sessionList(actionableSessionID: "needs-user"))
     }
 
     @Test

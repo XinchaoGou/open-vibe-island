@@ -149,6 +149,9 @@ public struct JumpTarget: Equatable, Codable, Sendable {
     /// `"Codex.app"`, the jump uses the `codex://threads/<id>` URL scheme
     /// to open the conversation directly rather than just activating the app.
     public var codexThreadID: String?
+    /// SSH host that owns a Codex Desktop thread. Remote threads cannot be
+    /// resolved reliably through the public `codex://threads/<id>` route alone.
+    public var codexRemoteHost: String?
 
     public init(
         terminalApp: String,
@@ -160,7 +163,8 @@ public struct JumpTarget: Equatable, Codable, Sendable {
         tmuxTarget: String? = nil,
         tmuxSocketPath: String? = nil,
         warpPaneUUID: String? = nil,
-        codexThreadID: String? = nil
+        codexThreadID: String? = nil,
+        codexRemoteHost: String? = nil
     ) {
         self.terminalApp = terminalApp
         self.workspaceName = workspaceName
@@ -172,6 +176,7 @@ public struct JumpTarget: Equatable, Codable, Sendable {
         self.tmuxSocketPath = tmuxSocketPath
         self.warpPaneUUID = warpPaneUUID
         self.codexThreadID = codexThreadID
+        self.codexRemoteHost = codexRemoteHost
     }
 }
 

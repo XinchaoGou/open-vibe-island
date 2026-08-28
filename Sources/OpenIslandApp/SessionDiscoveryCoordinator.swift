@@ -368,10 +368,18 @@ final class SessionDiscoveryCoordinator {
 
     // MARK: - Rollout tracking
 
-    /// Periodic Codex.app maintenance: reconcile archived/stalled sessions and
-    /// re-scan rollouts. Throttled internally; safe to call from the 2s monitor loop.
-    func maintainCodexAppSessionsIfNeeded() {
+    static func shouldRediscoverCodexAppSessions(appServerConnected: Bool) -> Bool {
+        !appServerConnected
+    }
+
+    /// Periodic Codex.app maintenance: reconcile archived/stalled sessions and,
+    /// while the app-server is unavailable, re-scan rollouts as a fallback.
+    /// Throttled internally; safe to call from the 2s monitor loop.
+    func maintainCodexAppSessionsIfNeeded(appServerConnected: Bool = false) {
         reconcileStalledCodexAppSessionsIfNeeded()
+        guard Self.shouldRediscoverCodexAppSessions(appServerConnected: appServerConnected) else {
+            return
+        }
         rediscoverCodexAppSessionsIfNeeded()
     }
 

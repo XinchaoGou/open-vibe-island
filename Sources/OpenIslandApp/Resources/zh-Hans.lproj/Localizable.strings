@@ -43,6 +43,10 @@
 "settings.general.languageEnglish" = "English";
 "settings.general.languageChinese" = "简体中文";
 "settings.general.languageTraditionalChinese" = "繁體中文";
+"settings.general.hiddenSessions" = "已隐藏的会话";
+"settings.general.hiddenSessionsEmpty" = "没有隐藏的会话";
+"settings.general.hiddenSessionsFooter" = "只影响 Open Island，不会删除或归档原任务。";
+"settings.general.restoreSession" = "恢复";
 
 /* Settings - Personalization (v6) */
 "settings.tab.appearance" = "个性化";
@@ -183,6 +187,8 @@
 
 /* Island Panel - Session List */
 "island.sessionList.title" = "会话";
+"island.session.hide" = "从岛上隐藏";
+"island.session.dismiss" = "关闭会话";
 "island.sessionOverview.total" = "总计";
 "island.sessionOverview.waiting" = "等待";
 "island.sessionOverview.waitingCompact" = "待";

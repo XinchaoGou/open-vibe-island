@@ -34,6 +34,8 @@ public struct CodexUsageWindow: Equatable, Codable, Sendable, Identifiable {
 }
 
 public struct CodexUsageSnapshot: Equatable, Codable, Sendable {
+    public static let appServerSourcePath = "codex-app-server"
+
     public var sourceFilePath: String
     public var capturedAt: Date?
     public var planType: String?
@@ -56,6 +58,33 @@ public struct CodexUsageSnapshot: Equatable, Codable, Sendable {
 
     public var isEmpty: Bool {
         windows.isEmpty
+    }
+}
+
+public extension CodexUsageSnapshot {
+    init(rateLimits: CodexAccountRateLimitSnapshot, capturedAt: Date = .now) {
+        let windows = [
+            ("primary", rateLimits.primary),
+            ("secondary", rateLimits.secondary),
+        ].compactMap { key, window -> CodexUsageWindow? in
+            guard let window, let minutes = window.windowDurationMins else { return nil }
+            return CodexUsageWindow(
+                key: key,
+                label: CodexUsageLoader.windowLabel(forMinutes: minutes),
+                usedPercentage: Double(window.usedPercent),
+                leftPercentage: max(0, 100 - Double(window.usedPercent)),
+                windowMinutes: minutes,
+                resetsAt: window.resetsAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+            )
+        }
+
+        self.init(
+            sourceFilePath: Self.appServerSourcePath,
+            capturedAt: capturedAt,
+            planType: rateLimits.planType,
+            limitID: rateLimits.limitId,
+            windows: windows
+        )
     }
 }
 
@@ -190,7 +219,7 @@ public enum CodexUsageLoader {
         )
     }
 
-    private static func windowLabel(forMinutes minutes: Int) -> String {
+    static func windowLabel(forMinutes minutes: Int) -> String {
         let days = minutes / 1_440
         let remainingMinutesAfterDays = minutes % 1_440
         let hours = remainingMinutesAfterDays / 60

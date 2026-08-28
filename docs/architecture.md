@@ -44,6 +44,15 @@ OpenCode → JS plugin (~/.config/opencode/plugins/) → Unix socket → BridgeS
 3. Reconcile with active terminal processes
 4. Start live bridge
 
+### Codex Desktop task sync
+
+`CodexAppServerCoordinator` reads local Codex Desktop tasks from the bundled
+app-server. For SSH environments, it discovers Codex Desktop's active SSH
+proxy processes, opens a second read-only app-server client through the same
+SSH host alias, and speaks WebSocket frames over `codex app-server proxy`.
+Snapshots are reconciled per host so a local snapshot cannot remove remote
+tasks, and one SSH host cannot remove another host's tasks.
+
 **Fail-open principle**: if the bridge is unavailable, the hook process exits silently without writing to stdout, so the agent continues running unaffected.
 
 ## Event Model
@@ -61,7 +70,7 @@ Each event carries a stable session identifier, agent type, timestamps, and enou
 
 ## State Management
 
-- `SessionState.apply(_:)` is the single source of truth for session mutations (pure reducer)
+- `SessionState.apply(_:)` is the source of truth for event-driven session mutations (pure reducer); authoritative Codex task-list snapshots use the scoped `reconcileCodexAppThreadSnapshot` path
 - `AppModel` owns all live state and bridge lifecycle
 - All models are `Sendable` and `Codable`
 

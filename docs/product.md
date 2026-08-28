@@ -23,7 +23,7 @@ CLI coding agents are powerful, but they pull attention away from the editor and
 | Agent | Status | Notes |
 |---|---|---|
 | **Claude Code** | Supported | Hook integration, JSONL session discovery, status line bridge, usage tracking |
-| **Codex** | Supported | Full hook integration (SessionStart, UserPromptSubmit, Stop), usage tracking |
+| **Codex** | Supported | Hook integration, Codex Desktop local and SSH task sync, usage tracking |
 | **OpenCode** | Supported | JS plugin integration, permission/question flows, process detection |
 | **Qoder** | Supported | Claude Code fork — same hook format, config at `~/.qoder/settings.json` |
 | **Qwen Code** | Supported | Claude Code fork — same hook format, config at `~/.qwen/settings.json` |
@@ -49,10 +49,12 @@ CLI coding agents are powerful, but they pull attention away from the editor and
 
 - **Notch overlay** — sits in the notch area on notch Macs, falls back to a compact top-center bar on external displays or non-notch Macs
 - **Settings** — hook install/uninstall, usage dashboard, General, Display, Sound, Shortcuts, Lab, About
-- **Notification mode** — auto-height panel for permission requests and session events
+- **Notification mode** — auto-height panel reserved for completed work and permission requests that remain unresolved long enough to need human attention
 - **Notification sounds** — configurable system sounds with mute toggle
 - **i18n** — English and Simplified Chinese
 - **Session discovery** — auto-discover from local transcripts, persist across launches
+- **Codex Desktop SSH sessions** — mirror recent tasks from SSH environments already connected in Codex Desktop
+- **Local session visibility** — hide completed sessions from the island without deleting or archiving the source task, and restore them from General settings
 - **Process discovery** — match active agents via `ps`/`lsof`
 - **DMG packaging** — signing, notarization, GitHub Actions release workflow
 - **Auto-update** — Sparkle-based automatic updates with appcast

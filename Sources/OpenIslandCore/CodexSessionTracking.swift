@@ -8,6 +8,7 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
     public var lastAssistantMessage: String?
     public var currentTool: String?
     public var currentCommandPreview: String?
+    public var remoteHost: String?
 
     public init(
         transcriptPath: String? = nil,
@@ -15,7 +16,8 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
         lastUserPrompt: String? = nil,
         lastAssistantMessage: String? = nil,
         currentTool: String? = nil,
-        currentCommandPreview: String? = nil
+        currentCommandPreview: String? = nil,
+        remoteHost: String? = nil
     ) {
         self.transcriptPath = transcriptPath
         self.initialUserPrompt = initialUserPrompt
@@ -23,6 +25,7 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
         self.lastAssistantMessage = lastAssistantMessage
         self.currentTool = currentTool
         self.currentCommandPreview = currentCommandPreview
+        self.remoteHost = remoteHost
     }
 
     public var isEmpty: Bool {
@@ -32,6 +35,7 @@ public struct CodexSessionMetadata: Equatable, Codable, Sendable {
             && lastAssistantMessage == nil
             && currentTool == nil
             && currentCommandPreview == nil
+            && remoteHost == nil
     }
 }
 
@@ -99,6 +103,7 @@ public struct CodexTrackedSessionRecord: Equatable, Codable, Sendable {
         // restarted sessions continue to use app-level liveness rather than
         // falling back to CLI subprocess matching (which would kill them).
         session.isCodexAppSession = jumpTarget?.terminalApp == "Codex.app"
+        session.isRemote = codexMetadata?.remoteHost != nil
         return session
     }
 
@@ -149,7 +154,15 @@ public extension CodexTrackedSessionRecord {
     }
 
     var shouldRestoreToLiveState: Bool {
-        origin != .demo && !LegacyMockSessionIDs.all.contains(sessionID)
+        guard origin != .demo, !LegacyMockSessionIDs.all.contains(sessionID) else {
+            return false
+        }
+        guard let transcriptPath = codexMetadata?.transcriptPath else {
+            return true
+        }
+        return !CodexRolloutDiscovery.isSubagentRollout(
+            at: URL(fileURLWithPath: transcriptPath)
+        )
     }
 }
 
@@ -368,6 +381,7 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
         var sessionID: String
         var cwd: String
         var timestamp: Date?
+        var isSubagent: Bool
 
         var workspaceName: String {
             let workspace = URL(fileURLWithPath: cwd).lastPathComponent
@@ -630,6 +644,10 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
         sessionMeta: SessionMeta?
     ) -> CodexTrackedSessionRecord? {
         guard let sessionMeta else { return nil }
+        guard !sessionMeta.isSubagent else { return nil }
+        guard !CodexRolloutReducer.isInternalSessionPrompt(snapshot.initialUserPrompt) else {
+            return nil
+        }
 
         let summary = snapshot.summary ?? sessionMeta.defaultSummary
         let updatedAt = snapshot.updatedAt ?? sessionMeta.timestamp ?? modifiedAt
@@ -675,8 +693,40 @@ public final class CodexRolloutDiscovery: @unchecked Sendable {
             cwd: cwd,
             timestamp: codexRolloutParseTimestamp(
                 (payload["timestamp"] as? String) ?? (object["timestamp"] as? String)
-            )
+            ),
+            isSubagent: Self.isSubagentSessionMeta(payload)
         )
+    }
+
+    fileprivate static func isSubagentRollout(at fileURL: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
+            return false
+        }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: streamingChunkSize),
+              !data.isEmpty else {
+            return false
+        }
+
+        for line in String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let object = codexRolloutJSONObject(for: String(line)),
+                  object["type"] as? String == "session_meta" else {
+                continue
+            }
+            let payload = object["payload"] as? [String: Any] ?? [:]
+            return isSubagentSessionMeta(payload)
+        }
+        return false
+    }
+
+    private static func isSubagentSessionMeta(_ payload: [String: Any]) -> Bool {
+        if (payload["thread_source"] as? String)?.lowercased() == "subagent" {
+            return true
+        }
+        if (payload["source"] as? String)?.lowercased() == "subagent" {
+            return true
+        }
+        return (payload["source"] as? [String: Any])?["subagent"] != nil
     }
 
     private func extractCompleteLines(from buffer: inout Data) -> [String] {
@@ -1493,11 +1543,18 @@ public enum CodexRolloutReducer {
     }
 
     private static func isInjectedPromptBlock(_ text: String) -> Bool {
-        text.hasPrefix("# AGENTS.md instructions for ")
+        text.hasPrefix("# AGENTS.md instructions")
+            || text.hasPrefix("<recommended_plugins>")
             || text.hasPrefix("<environment_context>")
             || text.hasPrefix("<permissions instructions>")
             || text.hasPrefix("<collaboration_mode>")
             || text.hasPrefix("<skills_instructions>")
+    }
+
+    static func isInternalSessionPrompt(_ text: String?) -> Bool {
+        guard let text else { return false }
+        return text.hasPrefix("The following is the Codex agent history whose request action you are assessing.")
+            || text.hasPrefix("The following is the Codex agent history added since your last approval assessment.")
     }
 
     private static func clipped(_ value: String?, limit: Int = 110) -> String? {
@@ -1580,6 +1637,7 @@ public final class CodexRolloutWatcher: @unchecked Sendable {
 
     private func syncLocked(targets: [CodexRolloutWatchTarget]) {
         let targetMap = Dictionary(uniqueKeysWithValues: targets.map { ($0.sessionID, $0) })
+        var targetsChanged = Set(observations.keys) != Set(targetMap.keys)
 
         observations = observations.reduce(into: [:]) { partialResult, pair in
             guard let updatedTarget = targetMap[pair.key] else {
@@ -1589,11 +1647,13 @@ public final class CodexRolloutWatcher: @unchecked Sendable {
             if pair.value.target == updatedTarget {
                 partialResult[pair.key] = pair.value
             } else {
+                targetsChanged = true
                 partialResult[pair.key] = makeObservation(for: updatedTarget)
             }
         }
 
         for target in targets where observations[target.sessionID] == nil {
+            targetsChanged = true
             observations[target.sessionID] = makeObservation(for: target)
         }
 
@@ -1613,7 +1673,12 @@ public final class CodexRolloutWatcher: @unchecked Sendable {
             timer.resume()
         }
 
-        pollLocked()
+        // The timer already polls unchanged observations. Avoid synchronously
+        // re-reading every tracked transcript when AppModel refreshes the
+        // target list after an unrelated bridge event.
+        if targetsChanged {
+            pollLocked()
+        }
     }
 
     private func pollLocked() {

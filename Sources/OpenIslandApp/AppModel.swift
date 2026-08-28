@@ -46,6 +46,7 @@ final class AppModel {
 
     var state = SessionState() {
         didSet {
+            restoreHiddenSessionsThatNeedAttention()
             _cachedSessionBuckets = nil
             pruneAgentsGridObservationTicketsIfNeeded()
             bridgeServer.updateStateSnapshot(state)
@@ -521,6 +522,14 @@ final class AppModel {
     @ObservationIgnored
     private let isNotificationSessionAlreadyFrontmost: @Sendable (AgentSession) async -> Bool
 
+    @ObservationIgnored
+    private let approvalNotificationDelay: Duration
+
+    @ObservationIgnored
+    private let sessionVisibilityStore: IslandSessionVisibilityStore
+
+    var hiddenIslandSessions: [HiddenIslandSession]
+
 
     @ObservationIgnored
     var harnessRuntimeMonitor: HarnessRuntimeMonitor? {
@@ -535,6 +544,9 @@ final class AppModel {
 
     @ObservationIgnored
     private var notificationPresentationTask: Task<Void, Never>?
+
+    @ObservationIgnored
+    private var approvalNotificationTasksBySessionID: [String: Task<Void, Never>] = [:]
 
     private static func appearanceDefaultsKey(_ profile: IslandAppearanceDisplayProfile, _ name: String) -> String {
         "appearance.island.v8.\(profile.rawValue).\(name)"
@@ -586,12 +598,17 @@ final class AppModel {
         },
         isNotificationSessionAlreadyFrontmost: @escaping @Sendable (AgentSession) async -> Bool = { session in
             await ForegroundTerminalSessionProbe().matches(session: session)
-        }
+        },
+        approvalNotificationDelay: Duration = .seconds(5),
+        sessionVisibilityStore: IslandSessionVisibilityStore = IslandSessionVisibilityStore()
     ) {
         self.terminalJumpAction = terminalJumpAction
         self.isNotificationSessionAlreadyFrontmost = isNotificationSessionAlreadyFrontmost
+        self.approvalNotificationDelay = approvalNotificationDelay
+        self.sessionVisibilityStore = sessionVisibilityStore
+        hiddenIslandSessions = sessionVisibilityStore.load()
         UserDefaults.standard.register(defaults: [
-            Self.showDockIconDefaultsKey: true,
+            Self.showDockIconDefaultsKey: false,
             Self.hapticFeedbackEnabledDefaultsKey: false,
             Self.completionReplyEnabledDefaultsKey: false,
             Self.suppressFrontmostNotificationsDefaultsKey: true,
@@ -674,6 +691,21 @@ final class AppModel {
         codexAppServer.onStatusMessage = { [weak self] message in
             self?.lastActionMessage = message
         }
+        codexAppServer.onUsageSnapshot = { [weak self] snapshot in
+            self?.hooks.codexUsageSnapshot = snapshot
+        }
+        codexAppServer.onThreadSnapshot = { [weak self] threads, remoteHost in
+            guard let self else { return }
+            var updatedState = self.state
+            guard updatedState.reconcileCodexAppThreadSnapshot(
+                threads,
+                remoteHost: remoteHost
+            ) else { return }
+            self.state = updatedState
+            self.synchronizeSelection()
+            self.refreshOverlayPlacementIfVisible()
+            self.discovery.scheduleCodexSessionPersistence()
+        }
         codexAppServer.isSessionTracked = { [weak self] id in
             self?.state.session(id: id) != nil
         }
@@ -700,7 +732,11 @@ final class AppModel {
             }
         }
         monitoring.onCodexAppMaintenanceTick = { [weak self] in
-            self?.discovery.maintainCodexAppSessionsIfNeeded()
+            guard let self else { return }
+            self.discovery.maintainCodexAppSessionsIfNeeded(
+                appServerConnected: self.codexAppServer.isConnected
+            )
+            self.codexAppServer.maintenanceTick()
         }
         refreshOverlayDisplayConfiguration()
         hasFinishedInit = true
@@ -1414,6 +1450,43 @@ final class AppModel {
         synchronizeSelection()
     }
 
+    func hideSessionFromIsland(_ sessionID: String) {
+        guard let session = state.session(id: sessionID),
+              session.phase == .completed else {
+            return
+        }
+
+        hiddenIslandSessions.removeAll { $0.id == sessionID }
+        hiddenIslandSessions.insert(
+            HiddenIslandSession(id: sessionID, title: session.title, hiddenAt: .now),
+            at: 0
+        )
+        sessionVisibilityStore.save(hiddenIslandSessions)
+        _cachedSessionBuckets = nil
+        synchronizeSelection()
+        refreshOverlayPlacementIfVisible()
+    }
+
+    func restoreSessionToIsland(_ sessionID: String) {
+        hiddenIslandSessions.removeAll { $0.id == sessionID }
+        sessionVisibilityStore.save(hiddenIslandSessions)
+        _cachedSessionBuckets = nil
+        synchronizeSelection()
+        refreshOverlayPlacementIfVisible()
+    }
+
+    private func restoreHiddenSessionsThatNeedAttention() {
+        let activeHiddenIDs = Set(state.sessions.lazy
+            .filter { $0.phase.requiresAttention }
+            .map(\.id))
+        guard hiddenIslandSessions.contains(where: { activeHiddenIDs.contains($0.id) }) else {
+            return
+        }
+
+        hiddenIslandSessions.removeAll { activeHiddenIDs.contains($0.id) }
+        sessionVisibilityStore.save(hiddenIslandSessions)
+    }
+
     func answerQuestion(for sessionID: String, answer: QuestionPromptResponse) {
         guard let session = state.session(id: sessionID) else {
             return
@@ -1499,6 +1572,19 @@ final class AppModel {
         }
 
         state.apply(event)
+        if let sessionID = event.sessionIDForIslandVisibility,
+           state.session(id: sessionID)?.phase.requiresAttention == true,
+           hiddenIslandSessions.contains(where: { $0.id == sessionID }) {
+            restoreSessionToIsland(sessionID)
+        }
+        switch event {
+        case let .actionableStateResolved(payload):
+            approvalNotificationTasksBySessionID.removeValue(forKey: payload.sessionID)?.cancel()
+        case let .sessionCompleted(payload):
+            approvalNotificationTasksBySessionID.removeValue(forKey: payload.sessionID)?.cancel()
+        default:
+            break
+        }
         reconcileIslandSurfaceAfterStateChange()
         if ingress == .bridge {
             monitoring.markSessionAttached(for: event)
@@ -1539,10 +1625,16 @@ final class AppModel {
         }
 
         if let surface = IslandSurface.notificationSurface(for: event) {
+            let delay: Duration = if case .permissionRequested = event {
+                approvalNotificationDelay
+            } else {
+                .zero
+            }
             scheduleNotificationSurfacePresentationIfNeeded(
                 surface,
                 wasAlreadyCompleted: wasAlreadyCompleted,
-                ingress: ingress
+                ingress: ingress,
+                delay: delay
             )
         }
     }
@@ -1550,12 +1642,45 @@ final class AppModel {
     private func scheduleNotificationSurfacePresentationIfNeeded(
         _ surface: IslandSurface,
         wasAlreadyCompleted: Bool,
-        ingress: TrackedEventIngress
+        ingress: TrackedEventIngress,
+        delay: Duration
     ) {
         guard !wasAlreadyCompleted,
               notificationSurfaceIsEligibleForPresentation(surface, ingress: ingress),
               let sessionID = surface.sessionID,
               let session = state.session(id: sessionID) else {
+            return
+        }
+
+        if delay > .zero {
+            approvalNotificationTasksBySessionID[sessionID]?.cancel()
+            approvalNotificationTasksBySessionID[sessionID] = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(for: delay)
+                } catch {
+                    return
+                }
+
+                guard let self else {
+                    return
+                }
+                defer { self.approvalNotificationTasksBySessionID.removeValue(forKey: sessionID) }
+
+                guard self.notificationSurfaceIsEligibleForPresentation(surface, ingress: ingress) else {
+                    return
+                }
+
+                if self.suppressFrontmostNotifications,
+                   await self.isNotificationSessionAlreadyFrontmost(session) {
+                    return
+                }
+
+                guard !Task.isCancelled,
+                      self.notificationSurfaceIsEligibleForPresentation(surface, ingress: ingress) else {
+                    return
+                }
+                self.presentNotificationSurface(surface)
+            }
             return
         }
 
@@ -1674,7 +1799,8 @@ final class AppModel {
 
     private func computeSessionBuckets() -> (primary: [AgentSession], overflow: [AgentSession]) {
         let now = Date.now
-        let rankedSessions = state.sessions.sorted { lhs, rhs in
+        let hiddenSessionIDs = Set(hiddenIslandSessions.map(\.id))
+        let rankedSessions = state.sessions.filter { !hiddenSessionIDs.contains($0.id) }.sorted { lhs, rhs in
             let lhsScore = displayPriority(for: lhs, now: now)
             let rhsScore = displayPriority(for: rhs, now: now)
 
@@ -1813,6 +1939,25 @@ final class AppModel {
         NSApplication.shared.terminate(nil)
     }
 
+}
+
+private extension AgentEvent {
+    var sessionIDForIslandVisibility: String? {
+        switch self {
+        case let .sessionStarted(payload): payload.sessionID
+        case let .activityUpdated(payload): payload.sessionID
+        case let .permissionRequested(payload): payload.sessionID
+        case let .questionAsked(payload): payload.sessionID
+        case let .sessionCompleted(payload): payload.sessionID
+        case let .jumpTargetUpdated(payload): payload.sessionID
+        case let .sessionMetadataUpdated(payload): payload.sessionID
+        case let .claudeSessionMetadataUpdated(payload): payload.sessionID
+        case let .geminiSessionMetadataUpdated(payload): payload.sessionID
+        case let .openCodeSessionMetadataUpdated(payload): payload.sessionID
+        case let .cursorSessionMetadataUpdated(payload): payload.sessionID
+        case let .actionableStateResolved(payload): payload.sessionID
+        }
+    }
 }
 
 // MARK: - Hex color helpers
